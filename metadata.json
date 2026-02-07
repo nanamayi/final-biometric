@@ -1,0 +1,7 @@
+{
+  "name": "Biometric Key Logging System",
+  "description": "A secure key management system utilizing facial capture and simulated biometric verification for engineering students.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
