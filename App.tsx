@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { User, HistoryItem, Tab } from './types';
 import RegisterSection from './components/RegisterSection';
@@ -9,6 +8,14 @@ import BottomNav from './components/BottomNav';
 import { Key, Loader2, AlertTriangle, ExternalLink } from 'lucide-react';
 import { supabase, SUPABASE_CONFIGURED } from './supabase';
 
+type ScanRow = {
+  id?: string | number;
+  fingerprint_id: string; // ✅ match your SQL (TEXT)
+  device_id?: string;
+  action?: string;
+  created_at?: string;
+};
+
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('Register');
   const [users, setUsers] = useState<User[]>([]);
@@ -16,8 +23,12 @@ const App: React.FC = () => {
   const [showSplash, setShowSplash] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
+  // last scan coming from ESP32 -> Supabase "scans" table
+  const [lastScan, setLastScan] = useState<ScanRow | null>(null);
+
   const fetchUsers = async () => {
     if (!SUPABASE_CONFIGURED) return;
+
     const { data, error } = await supabase
       .from('registered_users')
       .select('*')
@@ -25,23 +36,26 @@ const App: React.FC = () => {
 
     if (error) {
       console.error('Error fetching users:', error);
-    } else {
-      const transformedUsers: User[] = (data || []).map(u => ({
-        id: u.id,
-        fullName: u.full_name,
-        program: u.program,
-        position: u.position,
-        yearSection: '' as any,
-        photoUrl: u.photo_url,
-        fingerprint_id: u.fingerprint_id,
-        registeredAt: new Date(u.registered_at).getTime()
-      }));
-      setUsers(transformedUsers);
+      return;
     }
+
+    const transformedUsers: User[] = (data || []).map((u: any) => ({
+      id: u.id,
+      fullName: u.full_name,
+      program: u.program,
+      position: u.position,
+      yearSection: '' as any,
+      photoUrl: u.photo_url,
+      fingerprintId: u.fingerprint_id, // ✅ FIX: must be fingerprintId (camelCase)
+      registeredAt: new Date(u.registered_at).getTime()
+    }));
+
+    setUsers(transformedUsers);
   };
 
   const fetchHistory = async () => {
     if (!SUPABASE_CONFIGURED) return;
+
     const { data, error } = await supabase
       .from('history_view')
       .select('*')
@@ -49,28 +63,31 @@ const App: React.FC = () => {
 
     if (error) {
       console.error('Error fetching history:', error);
-    } else {
-      const transformedHistory: HistoryItem[] = (data || []).map(h => ({
-        id: h.id,
-        userId: h.user_id,
-        userName: h.user_name,
-        userPhoto: h.user_photo,
-        program: h.program,
-        position: h.position,
-        yearSection: h.year_section,
-        keyNumber: h.key_number,
-        date: new Date(h.log_date).toLocaleDateString(),
-        timeIn: new Date(h.time_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        timeOut: h.time_out ? new Date(h.time_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null,
-        status: h.status
-      }));
-      setHistory(transformedHistory);
+      return;
     }
+
+    const transformedHistory: HistoryItem[] = (data || []).map((h: any) => ({
+      id: h.id,
+      userId: h.user_id,
+      userName: h.user_name,
+      userPhoto: h.user_photo,
+      program: h.program,
+      position: h.position,
+      yearSection: h.year_section,
+      keyNumber: h.key_number,
+      date: new Date(h.log_date).toLocaleDateString(),
+      timeIn: new Date(h.time_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timeOut: h.time_out ? new Date(h.time_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null,
+      status: h.status
+    }));
+
+    setHistory(transformedHistory);
   };
 
+  // Initial load + splash
   useEffect(() => {
     const splashTimer = setTimeout(() => setShowSplash(false), 2500);
-    
+
     if (SUPABASE_CONFIGURED) {
       setIsLoading(true);
       Promise.all([fetchUsers(), fetchHistory()]).finally(() => setIsLoading(false));
@@ -79,7 +96,10 @@ const App: React.FC = () => {
     return () => clearTimeout(splashTimer);
   }, []);
 
+  // Tab-based refresh behavior
   useEffect(() => {
+    if (!SUPABASE_CONFIGURED) return;
+
     if (activeTab === 'Registered') fetchUsers();
     if (activeTab === 'History') fetchHistory();
     if (activeTab === 'Keylocker') {
@@ -88,21 +108,59 @@ const App: React.FC = () => {
     }
   }, [activeTab]);
 
+  // Realtime subscriptions (users, logs, scans)
+  useEffect(() => {
+    if (!SUPABASE_CONFIGURED) return;
+
+    const usersChannel = supabase
+      .channel('realtime-registered-users')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'registered_users' }, async () => {
+        await fetchUsers();
+      })
+      .subscribe();
+
+    const logsChannel = supabase
+      .channel('realtime-key-logs')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'key_logs' }, async () => {
+        await fetchHistory();
+      })
+      .subscribe();
+
+    const scansChannel = supabase
+      .channel('realtime-scans')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'scans' }, async (payload) => {
+        const row = payload.new as ScanRow;
+        setLastScan(row);
+
+        // optional: jump to Keylocker automatically when scan happens
+        setActiveTab('Keylocker');
+
+        // refresh data after scan (so UI stays updated)
+        await Promise.all([fetchUsers(), fetchHistory()]);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(usersChannel);
+      supabase.removeChannel(logsChannel);
+      supabase.removeChannel(scansChannel);
+    };
+  }, []);
+
   const handleRegister = async (newUser: User) => {
     if (!SUPABASE_CONFIGURED) {
       alert('Supabase is not configured.');
       return;
     }
     setIsLoading(true);
-    const { error } = await supabase
-      .from('registered_users')
-      .insert({
-        full_name: newUser.fullName,
-        program: newUser.program,
-        position: newUser.position,
-        photo_url: newUser.photoUrl,
-        fingerprint_id: newUser.fingerprintId
-      });
+
+    const { error } = await supabase.from('registered_users').insert({
+      full_name: newUser.fullName,
+      program: newUser.program,
+      position: newUser.position,
+      photo_url: newUser.photoUrl,
+      fingerprint_id: newUser.fingerprintId
+    });
 
     if (error) {
       alert('Failed to register: ' + error.message);
@@ -116,15 +174,14 @@ const App: React.FC = () => {
   const handleBorrow = async (item: HistoryItem) => {
     if (!SUPABASE_CONFIGURED) return;
     setIsLoading(true);
-    const { error } = await supabase
-      .from('key_logs')
-      .insert({
-        user_id: item.userId,
-        year_section: item.yearSection,
-        key_number: item.keyNumber,
-        status: 'Borrowed',
-        time_in: new Date().toISOString()
-      });
+
+    const { error } = await supabase.from('key_logs').insert({
+      user_id: item.userId,
+      year_section: item.yearSection,
+      key_number: item.keyNumber,
+      status: 'Borrowed',
+      time_in: new Date().toISOString()
+    });
 
     if (error) {
       alert('Failed to borrow key: ' + error.message);
@@ -137,7 +194,7 @@ const App: React.FC = () => {
   const handleReturn = async (logId: string) => {
     if (!SUPABASE_CONFIGURED) return;
     setIsLoading(true);
-    
+
     const { error: updateError } = await supabase
       .from('key_logs')
       .update({
@@ -168,13 +225,13 @@ const App: React.FC = () => {
           <div className="bg-gray-50 p-6 rounded-3xl text-left space-y-4">
             <p className="text-sm font-bold text-gray-700 uppercase tracking-wider">Instructions:</p>
             <div className="bg-white p-4 rounded-xl border border-gray-200 font-mono text-[11px] break-all shadow-inner text-indigo-700">
-              SUPABASE_URL=your_project_url<br/>
+              SUPABASE_URL=your_project_url<br />
               SUPABASE_ANON_KEY=your_anon_key
             </div>
           </div>
-          <a 
-            href="https://supabase.com/dashboard" 
-            target="_blank" 
+          <a
+            href="https://supabase.com/dashboard"
+            target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center justify-center gap-2 px-8 py-4 bg-indigo-600 text-white font-black rounded-2xl hover:bg-indigo-700 transition-all text-sm uppercase shadow-lg"
           >
@@ -214,9 +271,7 @@ const App: React.FC = () => {
           <div className="p-4 bg-white/10 rounded-3xl mb-6 animate-title-opening">
             <Key size={64} className="text-white" />
           </div>
-          <h1 className="text-3xl font-black uppercase tracking-widest animate-letter-reveal">
-            Biometric Key Locker
-          </h1>
+          <h1 className="text-3xl font-black uppercase tracking-widest animate-letter-reveal">Biometric Key Locker</h1>
           <div className="mt-8 w-48 h-1 bg-white/20 rounded-full overflow-hidden">
             <div className="h-full bg-white w-1/2 animate-[progress_2.5s_ease-in-out_infinite]" />
           </div>
@@ -232,14 +287,21 @@ const App: React.FC = () => {
             Biometric Key Locker
           </h1>
         </div>
-        <div className={`text-xs font-black px-3 py-1.5 rounded-full ${activeTab === 'History' ? 'bg-white/10 text-white' : 'bg-indigo-50 text-indigo-700'}`}>
-          {new Date().toLocaleDateString()}
+
+        <div className="flex items-center gap-2">
+          {lastScan?.fingerprint_id ? (
+            <div className={`text-xs font-black px-3 py-1.5 rounded-full ${activeTab === 'History' ? 'bg-white/10 text-white' : 'bg-emerald-50 text-emerald-700'}`}>
+              Scan: ID {lastScan.fingerprint_id}
+            </div>
+          ) : null}
+
+          <div className={`text-xs font-black px-3 py-1.5 rounded-full ${activeTab === 'History' ? 'bg-white/10 text-white' : 'bg-indigo-50 text-indigo-700'}`}>
+            {new Date().toLocaleDateString()}
+          </div>
         </div>
       </header>
 
-      <main className="flex-1 w-full max-w-2xl mx-auto px-4 py-6">
-        {renderContent()}
-      </main>
+      <main className="flex-1 w-full max-w-2xl mx-auto px-4 py-6">{renderContent()}</main>
 
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
     </div>
