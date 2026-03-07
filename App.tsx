@@ -288,14 +288,14 @@ const App: React.FC = () => {
 
       case 'History':
         return <HistorySection history={history} />;
-
+        
       default:
-        return (
-          <RegisterSection
-            onRegister={handleRegister}
-            lastScan={lastScan}
-          />
-        );
+  return (
+    <RegisterSection
+      onRegister={handleRegister}
+      users={users}
+    />
+  );
     }
   };
 
