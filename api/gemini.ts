@@ -25,15 +25,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }),
     });
 
+    const raw = await response.text();
+
     if (!response.ok) {
-      const errText = await response.text().catch(() => "");
       return res.status(response.status).json({
         error: "Gemini request failed",
-        details: errText,
+        details: raw,
       });
     }
 
-    const data: any = await response.json();
+    let data: any;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return res.status(500).json({
+        error: "Gemini returned invalid JSON",
+        details: raw,
+      });
+    }
 
     const text =
       data?.candidates?.[0]?.content?.parts
@@ -42,6 +51,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({ text });
   } catch (error: any) {
-    return res.status(500).json({ error: "Gemini request failed", details: String(error) });
+    return res.status(500).json({
+      error: "Gemini request failed",
+      details: String(error),
+    });
   }
 }
