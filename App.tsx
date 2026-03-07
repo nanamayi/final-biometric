@@ -265,13 +265,14 @@ const App: React.FC = () => {
 
     switch (activeTab) {
       case 'Register':
-        return (
-          <RegisterSection
-            onRegister={handleRegister}
-            lastScan={lastScan}
-          />
-        );
-
+      
+  return (
+    <RegisterSection
+      onRegister={handleRegister}
+      users={users}
+      lastScan={lastScan}
+    />
+  );
       case 'Keylocker':
         return (
           <KeylockerSection

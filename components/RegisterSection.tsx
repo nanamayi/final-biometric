@@ -1,13 +1,20 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { Program, Position, YearSection, User } from '../types';
 import { Camera, Fingerprint, UserPlus, Trash2, CheckCircle2 } from 'lucide-react';
 
 interface RegisterSectionProps {
   onRegister: (user: User) => void;
   users: User[];
+  lastScan?: {
+    id?: string | number;
+    fingerprint_id: string;
+    device_id?: string;
+    action?: string;
+    created_at?: string;
+  } | null;
 }
 
-const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) => {
+const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, lastScan }) => {
   const [fullName, setFullName] = useState('');
   const [program, setProgram] = useState<Program | ''>('');
   const [position, setPosition] = useState<Position | ''>('');
@@ -15,9 +22,10 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
   const [isCapturing, setIsCapturing] = useState(false);
 
-  const [fingerprintReady, setFingerprintReady] = useState(false);
-  const [assignedFingerprintId, setAssignedFingerprintId] = useState<string>('');
-  const [scanMessage, setScanMessage] = useState('Prepare fingerprint enroll to assign the next ID');
+ const [fingerprintReady, setFingerprintReady] = useState(false);
+const [assignedFingerprintId, setAssignedFingerprintId] = useState<string>('');
+const [scanMessage, setScanMessage] = useState('Waiting for fingerprint scan...');
+const [lastHandledScanId, setLastHandledScanId] = useState<string | number | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -66,24 +74,11 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     }
   };
 
-  const prepareFingerprintEnroll = () => {
-    const nextId = String(nextFingerprintId);
-
-    setAssignedFingerprintId(nextId);
-    setFingerprintReady(true);
-    setScanMessage(
-      `Assigned Fingerprint ID: ${nextId}. Use this same ID in the ESP32 enroll code.`
-    );
-
-    alert(
-      `Assigned Fingerprint ID: ${nextId}\n\n` +
-        `Next steps:\n` +
-        `1. Open the ESP32 enroll code\n` +
-        `2. Enter ${nextId} in Serial Monitor or set the same ID in enroll mode\n` +
-        `3. Enroll the fingerprint on the sensor\n` +
-        `4. After successful enroll, come back and click Complete Registration`
-    );
-  };
+ const prepareFingerprintEnroll = () => {
+  setFingerprintReady(false);
+  setAssignedFingerprintId('');
+  setScanMessage('Waiting for fingerprint scan...');
+};
 
   const handleRegister = () => {
     if (!fullName.trim()) {
@@ -137,6 +132,34 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     setAssignedFingerprintId('');
     setScanMessage('Prepare fingerprint enroll to assign the next ID');
   };
+
+  useEffect(() => {
+  if (!lastScan) return;
+
+  if (lastScan.id != null && lastHandledScanId === lastScan.id) return;
+
+  if (lastScan.id != null) {
+    setLastHandledScanId(lastScan.id);
+  }
+
+  const scannedId = String(lastScan.fingerprint_id ?? '').trim();
+  if (!scannedId) return;
+
+  const alreadyUsed = users.some(
+    (user) => String(user.fingerprintId).trim() === scannedId
+  );
+
+  if (alreadyUsed) {
+    setFingerprintReady(false);
+    setAssignedFingerprintId('');
+    setScanMessage(`Fingerprint ID ${scannedId} is already registered.`);
+    return;
+  }
+
+  setAssignedFingerprintId(scannedId);
+  setFingerprintReady(true);
+  setScanMessage(`Fingerprint detected: ID ${scannedId}`);
+}, [lastScan, lastHandledScanId, users]);
 
   return (
     <div className="bg-white rounded-[2rem] shadow-xl p-8 max-w-md mx-auto space-y-6">
@@ -284,7 +307,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
           >
             {fingerprintReady ? <CheckCircle2 size={24} /> : <Fingerprint size={24} />}
             <span className="font-black uppercase tracking-widest text-xs">
-              {fingerprintReady ? 'Fingerprint ID Ready' : 'Prepare Fingerprint Enroll'}
+             {fingerprintReady ? 'Fingerprint Detected' : 'Wait for Fingerprint'}
             </span>
           </button>
 
