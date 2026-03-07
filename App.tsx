@@ -10,7 +10,7 @@ import { supabase, SUPABASE_CONFIGURED } from './supabase';
 
 type ScanRow = {
   id?: string | number;
-  fingerprint_id: string; // ✅ match your SQL (TEXT)
+  fingerprint_id: string;
   device_id?: string;
   action?: string;
   created_at?: string;
@@ -46,7 +46,7 @@ const App: React.FC = () => {
       position: u.position,
       yearSection: '' as any,
       photoUrl: u.photo_url,
-      fingerprintId: u.fingerprint_id, // ✅ FIX: must be fingerprintId (camelCase)
+      fingerprintId: u.fingerprint_id,
       registeredAt: new Date(u.registered_at).getTime()
     }));
 
@@ -77,14 +77,15 @@ const App: React.FC = () => {
       keyNumber: h.key_number,
       date: new Date(h.log_date).toLocaleDateString(),
       timeIn: new Date(h.time_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      timeOut: h.time_out ? new Date(h.time_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null,
+      timeOut: h.time_out
+        ? new Date(h.time_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : null,
       status: h.status
     }));
 
     setHistory(transformedHistory);
   };
 
-  // Initial load + splash
   useEffect(() => {
     const splashTimer = setTimeout(() => setShowSplash(false), 2500);
 
@@ -96,7 +97,6 @@ const App: React.FC = () => {
     return () => clearTimeout(splashTimer);
   }, []);
 
-  // Tab-based refresh behavior
   useEffect(() => {
     if (!SUPABASE_CONFIGURED) return;
 
@@ -108,7 +108,6 @@ const App: React.FC = () => {
     }
   }, [activeTab]);
 
-  // Realtime subscriptions (users, logs, scans)
   useEffect(() => {
     if (!SUPABASE_CONFIGURED) return;
 
@@ -130,12 +129,15 @@ const App: React.FC = () => {
       .channel('realtime-scans')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'scans' }, async (payload) => {
         const row = payload.new as ScanRow;
-        setLastScan(row);
 
-        // optional: jump to Keylocker automatically when scan happens
-        setActiveTab('Keylocker');
+        setLastScan({
+          id: row.id ?? Date.now(),
+          fingerprint_id: String(row.fingerprint_id ?? '').trim(),
+          device_id: row.device_id,
+          action: row.action,
+          created_at: row.created_at
+        });
 
-        // refresh data after scan (so UI stays updated)
         await Promise.all([fetchUsers(), fetchHistory()]);
       })
       .subscribe();
@@ -152,6 +154,7 @@ const App: React.FC = () => {
       alert('Supabase is not configured.');
       return;
     }
+
     setIsLoading(true);
 
     const { error } = await supabase.from('registered_users').insert({
@@ -168,11 +171,13 @@ const App: React.FC = () => {
       await fetchUsers();
       setActiveTab('Keylocker');
     }
+
     setIsLoading(false);
   };
 
   const handleBorrow = async (item: HistoryItem) => {
     if (!SUPABASE_CONFIGURED) return;
+
     setIsLoading(true);
 
     const { error } = await supabase.from('key_logs').insert({
@@ -188,11 +193,13 @@ const App: React.FC = () => {
     } else {
       await fetchHistory();
     }
+
     setIsLoading(false);
   };
 
   const handleReturn = async (logId: string) => {
     if (!SUPABASE_CONFIGURED) return;
+
     setIsLoading(true);
 
     const { error: updateError } = await supabase
@@ -208,6 +215,7 @@ const App: React.FC = () => {
     } else {
       await fetchHistory();
     }
+
     setIsLoading(false);
   };
 
@@ -220,12 +228,15 @@ const App: React.FC = () => {
           </div>
           <div className="space-y-2">
             <h2 className="text-2xl font-black text-gray-900">Backend Setup Required</h2>
-            <p className="text-gray-500 font-medium text-sm">To enable cloud storage, connect your Supabase project.</p>
+            <p className="text-gray-500 font-medium text-sm">
+              To enable cloud storage, connect your Supabase project.
+            </p>
           </div>
           <div className="bg-gray-50 p-6 rounded-3xl text-left space-y-4">
             <p className="text-sm font-bold text-gray-700 uppercase tracking-wider">Instructions:</p>
             <div className="bg-white p-4 rounded-xl border border-gray-200 font-mono text-[11px] break-all shadow-inner text-indigo-700">
-              SUPABASE_URL=your_project_url<br />
+              SUPABASE_URL=your_project_url
+              <br />
               SUPABASE_ANON_KEY=your_anon_key
             </div>
           </div>
@@ -245,57 +256,111 @@ const App: React.FC = () => {
       return (
         <div className="flex flex-col items-center justify-center py-20 animate-pulse">
           <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
-          <p className="text-gray-500 font-bold uppercase tracking-widest text-xs">Processing Request...</p>
+          <p className="text-gray-500 font-bold uppercase tracking-widest text-xs">
+            Processing Request...
+          </p>
         </div>
       );
     }
 
     switch (activeTab) {
       case 'Register':
-        return <RegisterSection onRegister={handleRegister} />;
+        return (
+          <RegisterSection
+            onRegister={handleRegister}
+            lastScan={lastScan}
+          />
+        );
+
       case 'Keylocker':
-        return <KeylockerSection users={users} history={history} onBorrow={handleBorrow} onReturn={handleReturn} />;
+        return (
+          <KeylockerSection
+            users={users}
+            history={history}
+            onBorrow={handleBorrow}
+            onReturn={handleReturn}
+            lastScan={lastScan}
+          />
+        );
+
       case 'Registered':
         return <RegisteredUsersSection users={users} />;
+
       case 'History':
         return <HistorySection history={history} />;
+
       default:
-        return <RegisterSection onRegister={handleRegister} />;
+        return (
+          <RegisterSection
+            onRegister={handleRegister}
+            lastScan={lastScan}
+          />
+        );
     }
   };
 
   return (
-    <div className={`flex flex-col min-h-screen pb-20 transition-colors duration-500 ${activeTab === 'History' ? 'bg-[#3b5998]' : 'bg-indigo-50'}`}>
+    <div
+      className={`flex flex-col min-h-screen pb-20 transition-colors duration-500 ${
+        activeTab === 'History' ? 'bg-[#3b5998]' : 'bg-indigo-50'
+      }`}
+    >
       {showSplash && (
         <div className="fixed inset-0 z-[100] bg-indigo-900 flex flex-col items-center justify-center splash-overlay text-white">
           <div className="p-4 bg-white/10 rounded-3xl mb-6 animate-title-opening">
             <Key size={64} className="text-white" />
           </div>
-          <h1 className="text-3xl font-black uppercase tracking-widest animate-letter-reveal">Biometric Key Locker</h1>
+          <h1 className="text-3xl font-black uppercase tracking-widest animate-letter-reveal">
+            Biometric Key Locker
+          </h1>
           <div className="mt-8 w-48 h-1 bg-white/20 rounded-full overflow-hidden">
             <div className="h-full bg-white w-1/2 animate-[progress_2.5s_ease-in-out_infinite]" />
           </div>
         </div>
       )}
 
-      <header className={`p-4 sticky top-0 z-50 flex items-center justify-between transition-colors duration-500 ${activeTab === 'History' ? 'bg-[#3b5998] text-white shadow-none' : 'bg-white shadow-sm'}`}>
+      <header
+        className={`p-4 sticky top-0 z-50 flex items-center justify-between transition-colors duration-500 ${
+          activeTab === 'History' ? 'bg-[#3b5998] text-white shadow-none' : 'bg-white shadow-sm'
+        }`}
+      >
         <div className="flex items-center gap-3">
-          <div className={`${activeTab === 'History' ? 'bg-white/20' : 'bg-indigo-600'} p-2 rounded-lg text-white shadow-sm`}>
+          <div
+            className={`${
+              activeTab === 'History' ? 'bg-white/20' : 'bg-indigo-600'
+            } p-2 rounded-lg text-white shadow-sm`}
+          >
             <Key size={22} />
           </div>
-          <h1 className={`font-black text-xl tracking-tight ${activeTab === 'History' ? 'text-white' : 'text-indigo-900'}`}>
+          <h1
+            className={`font-black text-xl tracking-tight ${
+              activeTab === 'History' ? 'text-white' : 'text-indigo-900'
+            }`}
+          >
             Biometric Key Locker
           </h1>
         </div>
 
         <div className="flex items-center gap-2">
           {lastScan?.fingerprint_id ? (
-            <div className={`text-xs font-black px-3 py-1.5 rounded-full ${activeTab === 'History' ? 'bg-white/10 text-white' : 'bg-emerald-50 text-emerald-700'}`}>
+            <div
+              className={`text-xs font-black px-3 py-1.5 rounded-full ${
+                activeTab === 'History'
+                  ? 'bg-white/10 text-white'
+                  : 'bg-emerald-50 text-emerald-700'
+              }`}
+            >
               Scan: ID {lastScan.fingerprint_id}
             </div>
           ) : null}
 
-          <div className={`text-xs font-black px-3 py-1.5 rounded-full ${activeTab === 'History' ? 'bg-white/10 text-white' : 'bg-indigo-50 text-indigo-700'}`}>
+          <div
+            className={`text-xs font-black px-3 py-1.5 rounded-full ${
+              activeTab === 'History'
+                ? 'bg-white/10 text-white'
+                : 'bg-indigo-50 text-indigo-700'
+            }`}
+          >
             {new Date().toLocaleDateString()}
           </div>
         </div>
