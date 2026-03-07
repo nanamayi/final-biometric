@@ -1,4 +1,3 @@
-
 import React, { useState, useRef } from 'react';
 import { Program, Position, YearSection, User } from '../types';
 import { Camera, Fingerprint, UserPlus, Trash2, CheckCircle2 } from 'lucide-react';
@@ -12,10 +11,13 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
   const [program, setProgram] = useState<Program | ''>('');
   const [position, setPosition] = useState<Position | ''>('');
   const [photo, setPhoto] = useState<string | null>(null);
+
   const [isCapturing, setIsCapturing] = useState(false);
+
   const [isScanningFingerprint, setIsScanningFingerprint] = useState(false);
   const [fingerprintDone, setFingerprintDone] = useState(false);
-  const [scanProgress, setScanProgress] = useState(0);
+  const [fingerprintId, setFingerprintId] = useState<string>('');
+  const [scanMessage, setScanMessage] = useState('Scan Fingerprint');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -28,8 +30,8 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
         videoRef.current.srcObject = stream;
       }
     } catch (err) {
-      console.error("Camera error:", err);
-      alert("Could not access camera.");
+      console.error('Camera error:', err);
+      alert('Could not access camera.');
       setIsCapturing(false);
     }
   };
@@ -43,50 +45,109 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
         context.drawImage(videoRef.current, 0, 0);
         const dataUrl = canvasRef.current.toDataURL('image/jpeg');
         setPhoto(dataUrl);
-        
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(track => track.stop());
+
+        const stream = videoRef.current.srcObject as MediaStream | null;
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+        }
+
         setIsCapturing(false);
       }
     }
   };
 
-  const simulateFingerprint = () => {
+  const scanFingerprint = async () => {
+    if (isScanningFingerprint) return;
+
     setIsScanningFingerprint(true);
-    setScanProgress(0);
-    const interval = setInterval(() => {
-      setScanProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setIsScanningFingerprint(false);
-          setFingerprintDone(true);
-          return 100;
-        }
-        return prev + 10;
+    setFingerprintDone(false);
+    setFingerprintId('');
+    setScanMessage('Waiting for fingerprint...');
+
+    try {
+      const response = await fetch('/api/fingerprint-scan', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          mode: 'register',
+          fullName,
+        }),
       });
-    }, 150);
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error || 'Fingerprint scan failed.');
+      }
+
+      if (data?.success && data?.fingerprintId) {
+        setFingerprintId(data.fingerprintId);
+        setFingerprintDone(true);
+        setScanMessage(`Fingerprint registered: ${data.fingerprintId}`);
+      } else {
+        setFingerprintDone(false);
+        setScanMessage('No fingerprint detected');
+        alert('No fingerprint detected. Please try again.');
+      }
+    } catch (error: any) {
+      console.error('Fingerprint scan error:', error);
+      setFingerprintDone(false);
+      setScanMessage('Scanner not connected');
+      alert(error?.message || 'Scanner not connected.');
+    } finally {
+      setIsScanningFingerprint(false);
+    }
   };
 
   const handleRegister = () => {
-    if (!fullName) { alert("Please enter your Full Name."); return; }
-    if (!program) { alert("Please select a Course."); return; }
-    if (!position) { alert("Please select a Position."); return; }
-    if (!photo) { alert("Please take a photo to proceed."); return; }
-    if (!fingerprintDone) { alert("Please scan your fingerprint to proceed."); return; }
+    if (!fullName) {
+      alert('Please enter your Full Name.');
+      return;
+    }
+
+    if (!program) {
+      alert('Please select a Course.');
+      return;
+    }
+
+    if (!position) {
+      alert('Please select a Position.');
+      return;
+    }
+
+    if (!photo) {
+      alert('Please take a photo to proceed.');
+      return;
+    }
+
+    if (!fingerprintDone || !fingerprintId) {
+      alert('Please scan your fingerprint to proceed.');
+      return;
+    }
 
     const newUser: User = {
       id: Math.random().toString(36).substr(2, 9),
       fullName,
       program: program as Program,
       position: position as Position,
-      // Default to empty; selection happens at the time of borrowing in Keylocker
-      yearSection: '' as YearSection, 
+      yearSection: '' as YearSection,
       photoUrl: photo,
-      fingerprintId: `FP-${Math.random().toString(36).substr(2, 5).toUpperCase()}`,
-      registeredAt: Date.now()
+      fingerprintId: fingerprintId,
+      registeredAt: Date.now(),
     };
 
     onRegister(newUser);
+
+    // Optional reset after successful registration
+    setFullName('');
+    setProgram('');
+    setPosition('');
+    setPhoto(null);
+    setFingerprintDone(false);
+    setFingerprintId('');
+    setScanMessage('Scan Fingerprint');
   };
 
   return (
@@ -105,31 +166,38 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
             {photo ? (
               <img src={photo} alt="User" className="w-full h-full object-cover" />
             ) : isCapturing ? (
-              <video ref={videoRef} autoPlay playsInline className="w-full h-full object-cover scale-x-[-1]" />
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                className="w-full h-full object-cover scale-x-[-1]"
+              />
             ) : (
               <Camera size={40} className="text-gray-400" />
             )}
           </div>
-          
+
           <div className="flex justify-center mt-3">
             {!photo && !isCapturing && (
-              <button 
+              <button
                 onClick={startCamera}
                 className="text-sm font-bold uppercase tracking-widest text-indigo-700 bg-indigo-50 px-5 py-2.5 rounded-full hover:bg-indigo-100 transition-colors border border-indigo-100"
               >
                 Take Photo
               </button>
             )}
+
             {isCapturing && (
-              <button 
+              <button
                 onClick={capturePhoto}
                 className="text-sm font-bold uppercase tracking-widest text-white bg-indigo-600 px-5 py-2.5 rounded-full shadow-lg hover:bg-indigo-700 transition-all"
               >
                 Capture
               </button>
             )}
+
             {photo && (
-              <button 
+              <button
                 onClick={() => setPhoto(null)}
                 className="text-sm font-bold uppercase tracking-widest text-red-700 bg-red-50 px-5 py-2.5 rounded-full hover:bg-red-100 transition-colors flex items-center gap-1 border border-red-100"
               >
@@ -137,14 +205,17 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
               </button>
             )}
           </div>
+
           <canvas ref={canvasRef} className="hidden" />
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="text-xs font-black text-gray-500 uppercase tracking-widest block mb-1.5 ml-1">Full Name</label>
-            <input 
-              type="text" 
+            <label className="text-xs font-black text-gray-500 uppercase tracking-widest block mb-1.5 ml-1">
+              Full Name
+            </label>
+            <input
+              type="text"
               placeholder="Enter your full name"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
@@ -153,62 +224,82 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
           </div>
 
           <div>
-            <label className="text-xs font-black text-gray-500 uppercase tracking-widest block mb-1.5 ml-1">Course</label>
-            <select 
+            <label className="text-xs font-black text-gray-500 uppercase tracking-widest block mb-1.5 ml-1">
+              Course
+            </label>
+            <select
               value={program}
               onChange={(e) => setProgram(e.target.value as Program)}
               className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black appearance-none"
             >
-              <option value="" className="text-gray-400">Select your course</option>
-              <option value="BSCE" className="text-gray-900">BSCE</option>
-              <option value="BSEE" className="text-gray-900">BSEE</option>
-              <option value="BSME" className="text-gray-900">BSME</option>
-              <option value="BSCPE" className="text-gray-900">BSCPE</option>
-              <option value="BSIE" className="text-gray-900">BSIE</option>
+              <option value="" className="text-gray-400">
+                Select your course
+              </option>
+              <option value="BSCE" className="text-gray-900">
+                BSCE
+              </option>
+              <option value="BSEE" className="text-gray-900">
+                BSEE
+              </option>
+              <option value="BSME" className="text-gray-900">
+                BSME
+              </option>
+              <option value="BSCPE" className="text-gray-900">
+                BSCPE
+              </option>
+              <option value="BSIE" className="text-gray-900">
+                BSIE
+              </option>
             </select>
           </div>
 
           <div>
-            <label className="text-xs font-black text-gray-500 uppercase tracking-widest block mb-1.5 ml-1">Position</label>
-            <select 
+            <label className="text-xs font-black text-gray-500 uppercase tracking-widest block mb-1.5 ml-1">
+              Position
+            </label>
+            <select
               value={position}
               onChange={(e) => setPosition(e.target.value as Position)}
               className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black appearance-none"
             >
-              <option value="" className="text-gray-400">Select position</option>
-              <option value="Instructor" className="text-gray-900">Instructor</option>
-              <option value="Class Mayor" className="text-gray-900">Class Mayor</option>
+              <option value="" className="text-gray-400">
+                Select position
+              </option>
+              <option value="Instructor" className="text-gray-900">
+                Instructor
+              </option>
+              <option value="Class Mayor" className="text-gray-900">
+                Class Mayor
+              </option>
             </select>
           </div>
         </div>
 
         <div className="space-y-2 pt-2">
-          <button 
-            disabled={isScanningFingerprint || fingerprintDone}
-            onClick={simulateFingerprint}
+          <button
+            disabled={isScanningFingerprint}
+            onClick={scanFingerprint}
             className={`w-full py-4 rounded-2xl border-2 flex items-center justify-center gap-3 transition-all ${
-              fingerprintDone 
-                ? 'border-green-300 bg-green-50 text-green-800' 
+              fingerprintDone
+                ? 'border-green-300 bg-green-50 text-green-800'
                 : 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
-            }`}
+            } ${isScanningFingerprint ? 'opacity-80 cursor-not-allowed' : ''}`}
           >
-            {fingerprintDone ? <CheckCircle2 size={24} /> : <Fingerprint size={24} className={isScanningFingerprint ? 'animate-pulse' : ''} />}
+            {fingerprintDone ? (
+              <CheckCircle2 size={24} />
+            ) : (
+              <Fingerprint size={24} className={isScanningFingerprint ? 'animate-pulse' : ''} />
+            )}
+
             <span className="font-black uppercase tracking-widest text-xs">
-              {isScanningFingerprint ? `Scanning... ${scanProgress}%` : fingerprintDone ? 'Fingerprint Scanned' : 'Scan Fingerprint'}
+              {isScanningFingerprint ? 'Waiting for fingerprint...' : fingerprintDone ? 'Fingerprint Scanned' : 'Scan Fingerprint'}
             </span>
           </button>
-          
-          {isScanningFingerprint && (
-            <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-              <div 
-                className="bg-indigo-600 h-full transition-all duration-300" 
-                style={{ width: `${scanProgress}%` }}
-              />
-            </div>
-          )}
+
+          <p className="text-xs text-center text-gray-500 font-semibold">{scanMessage}</p>
         </div>
 
-        <button 
+        <button
           onClick={handleRegister}
           className="w-full py-4 bg-gradient-to-r from-indigo-700 to-purple-700 text-white font-black rounded-2xl shadow-lg hover:shadow-indigo-200/50 hover:opacity-95 transition-all active:scale-[0.98] mt-4 uppercase tracking-wider text-sm"
         >
