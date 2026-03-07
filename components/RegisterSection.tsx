@@ -14,10 +14,9 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
 
   const [isCapturing, setIsCapturing] = useState(false);
 
-  const [isScanningFingerprint, setIsScanningFingerprint] = useState(false);
-  const [fingerprintDone, setFingerprintDone] = useState(false);
   const [fingerprintId, setFingerprintId] = useState<string>('');
-  const [scanMessage, setScanMessage] = useState('Scan Fingerprint');
+  const [fingerprintReady, setFingerprintReady] = useState(false);
+  const [scanMessage, setScanMessage] = useState('Assign Fingerprint ID first');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -56,53 +55,37 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
     }
   };
 
-  const scanFingerprint = async () => {
-    if (isScanningFingerprint) return;
-
-    setIsScanningFingerprint(true);
-    setFingerprintDone(false);
-    setFingerprintId('');
-    setScanMessage('Waiting for fingerprint...');
-
-    try {
-      const response = await fetch('/api/fingerprint-scan', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          mode: 'register',
-          fullName,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error || 'Fingerprint scan failed.');
-      }
-
-      if (data?.success && data?.fingerprintId) {
-        setFingerprintId(data.fingerprintId);
-        setFingerprintDone(true);
-        setScanMessage(`Fingerprint registered: ${data.fingerprintId}`);
-      } else {
-        setFingerprintDone(false);
-        setScanMessage('No fingerprint detected');
-        alert('No fingerprint detected. Please try again.');
-      }
-    } catch (error: any) {
-      console.error('Fingerprint scan error:', error);
-      setFingerprintDone(false);
-      setScanMessage('Scanner not connected');
-      alert(error?.message || 'Scanner not connected.');
-    } finally {
-      setIsScanningFingerprint(false);
+  const prepareFingerprintEnroll = () => {
+    if (!fingerprintId.trim()) {
+      alert('Please enter a Fingerprint ID first.');
+      return;
     }
+
+    const numericId = Number(fingerprintId);
+
+    if (Number.isNaN(numericId) || numericId < 1 || numericId > 127) {
+      alert('Fingerprint ID must be a number from 1 to 127.');
+      return;
+    }
+
+    setFingerprintReady(true);
+    setScanMessage(
+      `Use Fingerprint ID ${fingerprintId} in the ESP32 enroll code, then enroll the finger.`
+    );
+
+    alert(
+      `Fingerprint ID ${fingerprintId} is now prepared.\n\n` +
+      `Next step:\n` +
+      `1. Open the ESP32 enroll code\n` +
+      `2. Set fingerprintIDToEnroll = ${fingerprintId}\n` +
+      `3. Upload to ESP32\n` +
+      `4. Enroll the finger on the sensor\n` +
+      `5. Then come back and click Complete Registration`
+    );
   };
 
   const handleRegister = () => {
-    if (!fullName) {
+    if (!fullName.trim()) {
       alert('Please enter your Full Name.');
       return;
     }
@@ -122,32 +105,43 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
       return;
     }
 
-    if (!fingerprintDone || !fingerprintId) {
-      alert('Please scan your fingerprint to proceed.');
+    if (!fingerprintId.trim()) {
+      alert('Please assign a Fingerprint ID.');
+      return;
+    }
+
+    const numericId = Number(fingerprintId);
+
+    if (Number.isNaN(numericId) || numericId < 1 || numericId > 127) {
+      alert('Fingerprint ID must be a number from 1 to 127.');
+      return;
+    }
+
+    if (!fingerprintReady) {
+      alert('Please prepare and enroll the fingerprint first.');
       return;
     }
 
     const newUser: User = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: Math.random().toString(36).substring(2, 11),
       fullName,
       program: program as Program,
       position: position as Position,
       yearSection: '' as YearSection,
       photoUrl: photo,
-      fingerprintId: fingerprintId,
+      fingerprintId: fingerprintId.trim(),
       registeredAt: Date.now(),
     };
 
     onRegister(newUser);
 
-    // Optional reset after successful registration
     setFullName('');
     setProgram('');
     setPosition('');
     setPhoto(null);
-    setFingerprintDone(false);
     setFingerprintId('');
-    setScanMessage('Scan Fingerprint');
+    setFingerprintReady(false);
+    setScanMessage('Assign Fingerprint ID first');
   };
 
   return (
@@ -229,7 +223,9 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
             </label>
             <select
               value={program}
-              onChange={(e) => setProgram(e.target.value as Program)}
+              onChange={(e) => {
+                setProgram(e.target.value as Program);
+              }}
               className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black appearance-none"
             >
               <option value="" className="text-gray-400">
@@ -259,7 +255,9 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
             </label>
             <select
               value={position}
-              onChange={(e) => setPosition(e.target.value as Position)}
+              onChange={(e) => {
+                setPosition(e.target.value as Position);
+              }}
               className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black appearance-none"
             >
               <option value="" className="text-gray-400">
@@ -273,30 +271,48 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister }) => {
               </option>
             </select>
           </div>
+
+          <div>
+            <label className="text-xs font-black text-gray-500 uppercase tracking-widest block mb-1.5 ml-1">
+              Fingerprint ID
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="127"
+              placeholder="Enter fingerprint ID (example: 1)"
+              value={fingerprintId}
+              onChange={(e) => {
+                setFingerprintId(e.target.value);
+                setFingerprintReady(false);
+                setScanMessage('Assign Fingerprint ID first');
+              }}
+              className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black placeholder-gray-400"
+            />
+            <p className="text-[11px] text-gray-500 mt-2">
+              Use the same Fingerprint ID in the ESP32 enroll code and in this registration form.
+            </p>
+          </div>
         </div>
 
         <div className="space-y-2 pt-2">
           <button
-            disabled={isScanningFingerprint}
-            onClick={scanFingerprint}
+            onClick={prepareFingerprintEnroll}
             className={`w-full py-4 rounded-2xl border-2 flex items-center justify-center gap-3 transition-all ${
-              fingerprintDone
+              fingerprintReady
                 ? 'border-green-300 bg-green-50 text-green-800'
                 : 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
-            } ${isScanningFingerprint ? 'opacity-80 cursor-not-allowed' : ''}`}
+            }`}
           >
-            {fingerprintDone ? (
-              <CheckCircle2 size={24} />
-            ) : (
-              <Fingerprint size={24} className={isScanningFingerprint ? 'animate-pulse' : ''} />
-            )}
-
+            {fingerprintReady ? <CheckCircle2 size={24} /> : <Fingerprint size={24} />}
             <span className="font-black uppercase tracking-widest text-xs">
-              {isScanningFingerprint ? 'Waiting for fingerprint...' : fingerprintDone ? 'Fingerprint Scanned' : 'Scan Fingerprint'}
+              {fingerprintReady ? 'Fingerprint ID Ready' : 'Prepare Fingerprint Enroll'}
             </span>
           </button>
 
-          <p className="text-xs text-center text-gray-500 font-semibold">{scanMessage}</p>
+          <p className="text-xs text-center text-gray-500 font-semibold">
+            {scanMessage}
+          </p>
         </div>
 
         <button
