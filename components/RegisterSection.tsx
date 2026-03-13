@@ -285,15 +285,10 @@ const [lastHandledScanId, setLastHandledScanId] = useState<string | number | nul
             </select>
           </div>
 
-          <div className="bg-gray-50 border-2 border-indigo-50 rounded-2xl px-4 py-3.5">
-            <label className="text-xs font-black text-gray-500 uppercase tracking-widest block mb-1.5">
-              Next Fingerprint ID
-            </label>
-            <p className="text-lg font-black text-indigo-700">{assignedFingerprintId || nextFingerprintId}</p>
-            <p className="text-[11px] text-gray-500 mt-1">
-              This ID is assigned automatically based on the next available fingerprint slot.
-            </p>
-          </div>
+          <div className="hidden">
+  <label>Next Fingerprint ID</label>
+  <p>{assignedFingerprintId || nextFingerprintId}</p>
+</div>
         </div>
 
         <div className="space-y-2 pt-2">
