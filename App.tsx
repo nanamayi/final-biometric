@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, HistoryItem, Tab } from './types';
 import RegisterSection from './components/RegisterSection';
 import KeylockerSection from './components/KeylockerSection';
@@ -23,8 +23,16 @@ const App: React.FC = () => {
   const [showSplash, setShowSplash] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
-  // last scan coming from ESP32 -> Supabase "scans" table
+  // Latest scan from Supabase
   const [lastScan, setLastScan] = useState<ScanRow | null>(null);
+
+  // Prevent duplicate scan updates from polling + realtime
+  const lastSeenScanKeyRef = useRef<string>('');
+
+  const makeScanKey = (row: Partial<ScanRow> | null | undefined) => {
+    if (!row) return '';
+    return `${row.id ?? ''}_${row.fingerprint_id ?? ''}_${row.created_at ?? ''}`;
+  };
 
   const fetchUsers = async () => {
     if (!SUPABASE_CONFIGURED) return;
@@ -46,7 +54,7 @@ const App: React.FC = () => {
       position: u.position,
       yearSection: '' as any,
       photoUrl: u.photo_url,
-      fingerprintId: u.fingerprint_id,
+      fingerprintId: String(u.fingerprint_id ?? '').trim(),
       registeredAt: new Date(u.registered_at).getTime()
     }));
 
@@ -76,9 +84,15 @@ const App: React.FC = () => {
       yearSection: h.year_section,
       keyNumber: h.key_number,
       date: new Date(h.log_date).toLocaleDateString(),
-      timeIn: new Date(h.time_in).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timeIn: new Date(h.time_in).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit'
+      }),
       timeOut: h.time_out
-        ? new Date(h.time_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        ? new Date(h.time_out).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit'
+          })
         : null,
       status: h.status
     }));
@@ -86,12 +100,49 @@ const App: React.FC = () => {
     setHistory(transformedHistory);
   };
 
+  const fetchLatestScan = async () => {
+    if (!SUPABASE_CONFIGURED) return;
+
+    const { data, error } = await supabase
+      .from('scans')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      console.error('Error fetching latest scan:', error);
+      return;
+    }
+
+    if (!data) return;
+
+    const normalizedScan: ScanRow = {
+      id: data.id ?? Date.now(),
+      fingerprint_id: String(data.fingerprint_id ?? '').trim(),
+      device_id: data.device_id,
+      action: data.action,
+      created_at: data.created_at
+    };
+
+    const newScanKey = makeScanKey(normalizedScan);
+
+    if (!newScanKey) return;
+    if (lastSeenScanKeyRef.current === newScanKey) return;
+
+    lastSeenScanKeyRef.current = newScanKey;
+    setLastScan(normalizedScan);
+    console.log('Latest scan fetched/polled:', normalizedScan);
+  };
+
   useEffect(() => {
     const splashTimer = setTimeout(() => setShowSplash(false), 2500);
 
     if (SUPABASE_CONFIGURED) {
       setIsLoading(true);
-      Promise.all([fetchUsers(), fetchHistory()]).finally(() => setIsLoading(false));
+      Promise.all([fetchUsers(), fetchHistory(), fetchLatestScan()]).finally(() =>
+        setIsLoading(false)
+      );
     }
 
     return () => clearTimeout(splashTimer);
@@ -105,6 +156,10 @@ const App: React.FC = () => {
     if (activeTab === 'Keylocker') {
       fetchUsers();
       fetchHistory();
+      fetchLatestScan();
+    }
+    if (activeTab === 'Register') {
+      fetchLatestScan();
     }
   }, [activeTab]);
 
@@ -113,36 +168,71 @@ const App: React.FC = () => {
 
     const usersChannel = supabase
       .channel('realtime-registered-users')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'registered_users' }, async () => {
-        await fetchUsers();
-      })
-      .subscribe();
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'registered_users' },
+        async () => {
+          console.log('registered_users changed');
+          await fetchUsers();
+        }
+      )
+      .subscribe((status) => {
+        console.log('Users channel status:', status);
+      });
 
     const logsChannel = supabase
       .channel('realtime-key-logs')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'key_logs' }, async () => {
-        await fetchHistory();
-      })
-      .subscribe();
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'key_logs' },
+        async () => {
+          console.log('key_logs changed');
+          await fetchHistory();
+        }
+      )
+      .subscribe((status) => {
+        console.log('Logs channel status:', status);
+      });
 
     const scansChannel = supabase
       .channel('realtime-scans')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'scans' }, async (payload) => {
-        const row = payload.new as ScanRow;
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'scans' },
+        async (payload) => {
+          console.log('Scan payload:', payload);
 
-        setLastScan({
-          id: row.id ?? Date.now(),
-          fingerprint_id: String(row.fingerprint_id ?? '').trim(),
-          device_id: row.device_id,
-          action: row.action,
-          created_at: row.created_at
-        });
+          const row = payload.new as ScanRow;
 
-        await Promise.all([fetchUsers(), fetchHistory()]);
-      })
-      .subscribe();
+          const normalizedScan: ScanRow = {
+            id: row.id ?? Date.now(),
+            fingerprint_id: String(row.fingerprint_id ?? '').trim(),
+            device_id: row.device_id,
+            action: row.action,
+            created_at: row.created_at
+          };
+
+          const newScanKey = makeScanKey(normalizedScan);
+
+          if (newScanKey && lastSeenScanKeyRef.current !== newScanKey) {
+            lastSeenScanKeyRef.current = newScanKey;
+            setLastScan(normalizedScan);
+          }
+
+          await Promise.all([fetchUsers(), fetchHistory()]);
+        }
+      )
+      .subscribe((status) => {
+        console.log('Scans channel status:', status);
+      });
+
+    // Fallback polling in case realtime websocket fails
+    const scanPoller = window.setInterval(async () => {
+      await fetchLatestScan();
+    }, 2000);
 
     return () => {
+      window.clearInterval(scanPoller);
       supabase.removeChannel(usersChannel);
       supabase.removeChannel(logsChannel);
       supabase.removeChannel(scansChannel);
@@ -226,20 +316,25 @@ const App: React.FC = () => {
           <div className="w-16 h-16 bg-amber-50 rounded-full flex items-center justify-center text-amber-600 mx-auto">
             <AlertTriangle size={32} />
           </div>
+
           <div className="space-y-2">
             <h2 className="text-2xl font-black text-gray-900">Backend Setup Required</h2>
             <p className="text-gray-500 font-medium text-sm">
               To enable cloud storage, connect your Supabase project.
             </p>
           </div>
+
           <div className="bg-gray-50 p-6 rounded-3xl text-left space-y-4">
-            <p className="text-sm font-bold text-gray-700 uppercase tracking-wider">Instructions:</p>
+            <p className="text-sm font-bold text-gray-700 uppercase tracking-wider">
+              Instructions:
+            </p>
             <div className="bg-white p-4 rounded-xl border border-gray-200 font-mono text-[11px] break-all shadow-inner text-indigo-700">
               SUPABASE_URL=your_project_url
               <br />
               SUPABASE_ANON_KEY=your_anon_key
             </div>
           </div>
+
           <a
             href="https://supabase.com/dashboard"
             target="_blank"
@@ -265,14 +360,14 @@ const App: React.FC = () => {
 
     switch (activeTab) {
       case 'Register':
-      
-  return (
-    <RegisterSection
-      onRegister={handleRegister}
-      users={users}
-      lastScan={lastScan}
-    />
-  );
+        return (
+          <RegisterSection
+            onRegister={handleRegister}
+            users={users}
+            lastScan={lastScan}
+          />
+        );
+
       case 'Keylocker':
         return (
           <KeylockerSection
@@ -289,14 +384,15 @@ const App: React.FC = () => {
 
       case 'History':
         return <HistorySection history={history} />;
-        
+
       default:
-  return (
-    <RegisterSection
-      onRegister={handleRegister}
-      users={users}
-    />
-  );
+        return (
+          <RegisterSection
+            onRegister={handleRegister}
+            users={users}
+            lastScan={lastScan}
+          />
+        );
     }
   };
 
@@ -311,9 +407,11 @@ const App: React.FC = () => {
           <div className="p-4 bg-white/10 rounded-3xl mb-6 animate-title-opening">
             <Key size={64} className="text-white" />
           </div>
+
           <h1 className="text-3xl font-black uppercase tracking-widest animate-letter-reveal">
             Biometric Key Locker
           </h1>
+
           <div className="mt-8 w-48 h-1 bg-white/20 rounded-full overflow-hidden">
             <div className="h-full bg-white w-1/2 animate-[progress_2.5s_ease-in-out_infinite]" />
           </div>
@@ -333,6 +431,7 @@ const App: React.FC = () => {
           >
             <Key size={22} />
           </div>
+
           <h1
             className={`font-black text-xl tracking-tight ${
               activeTab === 'History' ? 'text-white' : 'text-indigo-900'
@@ -367,7 +466,9 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      <main className="flex-1 w-full max-w-2xl mx-auto px-4 py-6">{renderContent()}</main>
+      <main className="flex-1 w-full max-w-2xl mx-auto px-4 py-6">
+        {renderContent()}
+      </main>
 
       <BottomNav activeTab={activeTab} onTabChange={setActiveTab} />
     </div>
