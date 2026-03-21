@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { Program, Position, YearSection, User } from '../types';
-import { Camera, Fingerprint, UserPlus, Trash2, CheckCircle2 } from 'lucide-react';
+import { Camera, Fingerprint, UserPlus, Trash2, CheckCircle2, XCircle } from 'lucide-react';
 
 interface RegisterSectionProps {
   onRegister: (user: User) => void;
@@ -22,10 +22,13 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, la
 
   const [isCapturing, setIsCapturing] = useState(false);
 
- const [fingerprintReady, setFingerprintReady] = useState(false);
-const [assignedFingerprintId, setAssignedFingerprintId] = useState<string>('');
-const [scanMessage, setScanMessage] = useState('Waiting for fingerprint scan...');
-const [lastHandledScanId, setLastHandledScanId] = useState<string | number | null>(null);
+  const [fingerprintReady, setFingerprintReady] = useState(false);
+  const [assignedFingerprintId, setAssignedFingerprintId] = useState<string>('');
+  const [scanMessage, setScanMessage] = useState('Click the button to start fingerprint scan.');
+  const [lastHandledScanId, setLastHandledScanId] = useState<string | number | null>(null);
+  const [isWaitingForFingerprint, setIsWaitingForFingerprint] = useState(false);
+  const [scanStartTime, setScanStartTime] = useState<number>(0);
+  const [scanError, setScanError] = useState('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -74,11 +77,15 @@ const [lastHandledScanId, setLastHandledScanId] = useState<string | number | nul
     }
   };
 
- const prepareFingerprintEnroll = () => {
-  setFingerprintReady(false);
-  setAssignedFingerprintId('');
-  setScanMessage('Waiting for fingerprint scan...');
-};
+  const prepareFingerprintEnroll = () => {
+    setFingerprintReady(false);
+    setAssignedFingerprintId('');
+    setScanError('');
+    setLastHandledScanId(null);
+    setScanStartTime(Date.now());
+    setIsWaitingForFingerprint(true);
+    setScanMessage('Waiting for a new fingerprint scan...');
+  };
 
   const handleRegister = () => {
     if (!fullName.trim()) {
@@ -102,12 +109,12 @@ const [lastHandledScanId, setLastHandledScanId] = useState<string | number | nul
     }
 
     if (!assignedFingerprintId) {
-      alert('Please prepare fingerprint enroll first.');
+      alert('Please scan a fingerprint first.');
       return;
     }
 
     if (!fingerprintReady) {
-      alert('Please finish the fingerprint preparation first.');
+      alert('Please finish the fingerprint scan first.');
       return;
     }
 
@@ -130,36 +137,64 @@ const [lastHandledScanId, setLastHandledScanId] = useState<string | number | nul
     setPhoto(null);
     setFingerprintReady(false);
     setAssignedFingerprintId('');
-    setScanMessage('Prepare fingerprint enroll to assign the next ID');
+    setIsWaitingForFingerprint(false);
+    setScanError('');
+    setLastHandledScanId(null);
+    setScanMessage('Click the button to start fingerprint scan.');
   };
 
   useEffect(() => {
-  if (!lastScan) return;
+    if (!isWaitingForFingerprint) return;
+    if (!lastScan) return;
+    if (!lastScan.created_at) return;
 
-  if (lastScan.id != null && lastHandledScanId === lastScan.id) return;
+    const scanTime = new Date(lastScan.created_at).getTime();
 
-  if (lastScan.id != null) {
-    setLastHandledScanId(lastScan.id);
-  }
+    // Ignore old scans before the user clicked the button
+    if (scanTime < scanStartTime) return;
 
-  const scannedId = String(lastScan.fingerprint_id ?? '').trim();
-  if (!scannedId) return;
+    // Avoid handling the same scan repeatedly
+    if (lastScan.id != null && lastHandledScanId === lastScan.id) return;
 
-  const alreadyUsed = users.some(
-    (user) => String(user.fingerprintId).trim() === scannedId
-  );
+    if (lastScan.id != null) {
+      setLastHandledScanId(lastScan.id);
+    }
 
-  if (alreadyUsed) {
-    setFingerprintReady(false);
-    setAssignedFingerprintId('');
-    setScanMessage(`Fingerprint ID ${scannedId} is already registered.`);
-    return;
-  }
+    const scannedId = String(lastScan.fingerprint_id ?? '').trim();
+    if (!scannedId) return;
 
-  setAssignedFingerprintId(scannedId);
-  setFingerprintReady(true);
-  setScanMessage(`Fingerprint detected: ID ${scannedId}`);
-}, [lastScan, lastHandledScanId, users]);
+    const alreadyUsed = users.some(
+      (user) => String(user.fingerprintId ?? '').trim() === scannedId
+    );
+
+    if (alreadyUsed) {
+      setFingerprintReady(false);
+      setAssignedFingerprintId('');
+      setScanError(`Fingerprint ID ${scannedId} is already registered.`);
+      setScanMessage(`Fingerprint ID ${scannedId} is already registered.`);
+      return;
+    }
+
+    setAssignedFingerprintId(scannedId);
+    setFingerprintReady(true);
+    setIsWaitingForFingerprint(false);
+    setScanError('');
+    setScanMessage(`Fingerprint detected: ID ${scannedId}`);
+  }, [lastScan, lastHandledScanId, users, isWaitingForFingerprint, scanStartTime]);
+
+  useEffect(() => {
+    if (!isWaitingForFingerprint) return;
+
+    const timeout = setTimeout(() => {
+      setIsWaitingForFingerprint(false);
+      setFingerprintReady(false);
+      setAssignedFingerprintId('');
+      setScanError('No new fingerprint scan detected.');
+      setScanMessage('Scan timeout. Please click again and scan your finger.');
+    }, 15000);
+
+    return () => clearTimeout(timeout);
+  }, [isWaitingForFingerprint]);
 
   return (
     <div className="bg-white rounded-[2rem] shadow-xl p-8 max-w-md mx-auto space-y-6">
@@ -246,21 +281,11 @@ const [lastHandledScanId, setLastHandledScanId] = useState<string | number | nul
               <option value="" className="text-gray-400">
                 Select your course
               </option>
-              <option value="BSCE" className="text-gray-900">
-                BSCE
-              </option>
-              <option value="BSEE" className="text-gray-900">
-                BSEE
-              </option>
-              <option value="BSME" className="text-gray-900">
-                BSME
-              </option>
-              <option value="BSCPE" className="text-gray-900">
-                BSCPE
-              </option>
-              <option value="BSIE" className="text-gray-900">
-                BSIE
-              </option>
+              <option value="BSCE" className="text-gray-900">BSCE</option>
+              <option value="BSEE" className="text-gray-900">BSEE</option>
+              <option value="BSME" className="text-gray-900">BSME</option>
+              <option value="BSCPE" className="text-gray-900">BSCPE</option>
+              <option value="BSIE" className="text-gray-900">BSIE</option>
             </select>
           </div>
 
@@ -276,19 +301,15 @@ const [lastHandledScanId, setLastHandledScanId] = useState<string | number | nul
               <option value="" className="text-gray-400">
                 Select position
               </option>
-              <option value="Instructor" className="text-gray-900">
-                Instructor
-              </option>
-              <option value="Class Mayor" className="text-gray-900">
-                Class Mayor
-              </option>
+              <option value="Instructor" className="text-gray-900">Instructor</option>
+              <option value="Class Mayor" className="text-gray-900">Class Mayor</option>
             </select>
           </div>
 
           <div className="hidden">
-  <label>Next Fingerprint ID</label>
-  <p>{assignedFingerprintId || nextFingerprintId}</p>
-</div>
+            <label>Next Fingerprint ID</label>
+            <p>{assignedFingerprintId || nextFingerprintId}</p>
+          </div>
         </div>
 
         <div className="space-y-2 pt-2">
@@ -297,12 +318,25 @@ const [lastHandledScanId, setLastHandledScanId] = useState<string | number | nul
             className={`w-full py-4 rounded-2xl border-2 flex items-center justify-center gap-3 transition-all ${
               fingerprintReady
                 ? 'border-green-300 bg-green-50 text-green-800'
+                : isWaitingForFingerprint
+                ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
                 : 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
             }`}
           >
-            {fingerprintReady ? <CheckCircle2 size={24} /> : <Fingerprint size={24} />}
+            {fingerprintReady ? (
+              <CheckCircle2 size={24} />
+            ) : scanError ? (
+              <XCircle size={24} />
+            ) : (
+              <Fingerprint size={24} />
+            )}
+
             <span className="font-black uppercase tracking-widest text-xs">
-             {fingerprintReady ? 'Fingerprint Detected' : 'Wait for Fingerprint'}
+              {fingerprintReady
+                ? 'Fingerprint Detected'
+                : isWaitingForFingerprint
+                ? 'Waiting for Fingerprint'
+                : 'Scan Fingerprint'}
             </span>
           </button>
 
