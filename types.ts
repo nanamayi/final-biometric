@@ -15,7 +15,7 @@ export interface User {
   position: Position;
   yearSection: YearSection;
   photoUrl: string;
-  fingerprintId: number;
+  fingerprintId: string;
   registeredAt: number;
 }
 
@@ -27,7 +27,7 @@ export interface HistoryItem {
   program: Program;
   position: Position;
   yearSection: YearSection;
- keyNumber: string; 
+  keyNumber: string; 
   date: string;
   timeIn: string;
   timeOut: string | null;
