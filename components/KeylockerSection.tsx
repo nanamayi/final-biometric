@@ -4,7 +4,7 @@ import { Fingerprint, Lock, Unlock, CheckCircle2, XCircle } from 'lucide-react';
 
 type ScanRow = {
   id?: string | number;
-  fingerprint_id: string; // matches your SQL (TEXT)
+  fingerprint_id: string;
   device_id?: string;
   action?: string;
   created_at?: string;
@@ -15,8 +15,6 @@ interface KeylockerSectionProps {
   history: HistoryItem[];
   onBorrow: (item: HistoryItem) => void;
   onReturn: (logId: string) => void;
-
-  // ✅ NEW: realtime scan coming from App.tsx
   lastScan?: ScanRow | null;
 }
 
@@ -32,12 +30,12 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [selectedKey, setSelectedKey] = useState<string>('');
 
-  // Realtime scan UI states
   const [showScanUI, setShowScanUI] = useState(false);
   const [isUnlocking, setIsUnlocking] = useState(false);
   const [scanMessage, setScanMessage] = useState<string>('Place finger on scanner…');
   const [scanError, setScanError] = useState<string>('');
   const [lastHandledScanId, setLastHandledScanId] = useState<string | number | null>(null);
+  const [scanStartTime, setScanStartTime] = useState<number>(0);
 
   const keys = Array.from({ length: 20 }, (_, i) => `Key-${100 + i + 1}`);
 
@@ -68,64 +66,76 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
     if (!currentUserBorrow) {
       if (!selectedYearSection) {
-        alert("Please select your Year & Section.");
+        alert('Please select your Year & Section.');
         return;
       }
       if (!selectedKey) {
-        alert("Please select a key to borrow.");
+        alert('Please select a key to borrow.');
         return;
       }
     }
 
-    // Open realtime scan overlay
+    setScanStartTime(Date.now());
+    setLastHandledScanId(null);
     setScanError('');
     setScanMessage('Waiting for realtime scan…');
     setIsUnlocking(false);
     setShowScanUI(true);
   };
 
-  // ✅ REALTIME: when a scan arrives while overlay is open, verify it
   useEffect(() => {
     if (!showScanUI) return;
     if (!lastScan) return;
     if (!selectedUser) return;
+    if (!lastScan.created_at) return;
+
+    const scanTime = new Date(lastScan.created_at).getTime();
+
+    // Ignore scans that happened before the user clicked scan
+    if (scanTime < scanStartTime) return;
 
     // Avoid handling same scan repeatedly
     if (lastScan.id != null && lastHandledScanId === lastScan.id) return;
-
-    // Mark handled
     if (lastScan.id != null) setLastHandledScanId(lastScan.id);
 
     const scanned = String(lastScan.fingerprint_id ?? '').trim();
-    const expected = String((selectedUser as any).fingerprintId ?? '').trim();
+    const expected = String(selectedUser.fingerprintId ?? '').trim();
 
     if (!expected) {
-      setScanError('This user has no fingerprint ID saved. Register fingerprint first.');
+      setScanError('This user has no fingerprint ID saved.');
       setScanMessage('Fingerprint not set.');
       return;
     }
 
     if (!scanned) return;
 
-    // Match check
     if (scanned !== expected) {
       setScanError(`No match. Scanned ID ${scanned} does not match selected user.`);
       setScanMessage('No match. Try again.');
       return;
     }
 
-    // Match!
     setScanError('');
     setScanMessage(`Verified (ID ${scanned})`);
     setIsUnlocking(true);
 
-    // Small delay for UI then execute action
     const t = setTimeout(() => {
       executeFinalAction();
-    }, 900);
+    }, 800);
 
     return () => clearTimeout(t);
-  }, [lastScan, showScanUI, selectedUser, lastHandledScanId]);
+  }, [lastScan, showScanUI, selectedUser, scanStartTime, lastHandledScanId]);
+
+  useEffect(() => {
+    if (!showScanUI) return;
+
+    const timeout = setTimeout(() => {
+      setScanError('No scan detected.');
+      setScanMessage('Scan timeout.');
+    }, 15000);
+
+    return () => clearTimeout(timeout);
+  }, [showScanUI]);
 
   const executeFinalAction = () => {
     if (!selectedUser) return;
@@ -135,7 +145,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     } else {
       const now = new Date();
       const newHistoryItem: HistoryItem = {
-        id: '', // DB will generate
+        id: '',
         userId: selectedUser.id,
         userName: selectedUser.fullName,
         userPhoto: selectedUser.photoUrl,
@@ -151,7 +161,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       onBorrow(newHistoryItem);
     }
 
-    // Reset overlay + selections
     setIsUnlocking(false);
     setShowScanUI(false);
     setScanMessage('Place finger on scanner…');
@@ -169,30 +178,38 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   return (
     <div className="space-y-6 max-w-lg mx-auto">
       <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 space-y-8 relative overflow-hidden border border-gray-100">
-
-        {/* REALTIME Verification Overlay */}
         {showScanUI && (
           <div className="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-8 animate-in fade-in duration-300">
             <div className="text-center mb-8">
-              <h3 className="text-2xl font-black text-gray-900 uppercase tracking-tight">Biometric Verification</h3>
-              <p className="text-gray-500 text-sm font-medium">
-                {scanMessage}
-              </p>
+              <h3 className="text-2xl font-black text-gray-900 uppercase tracking-tight">
+                Biometric Verification
+              </h3>
+              <p className="text-gray-500 text-sm font-medium">{scanMessage}</p>
             </div>
 
             <div className="relative mb-8">
               <div
                 className={`w-32 h-32 rounded-full flex items-center justify-center transition-all duration-700 ${
-                  isUnlocking ? 'bg-green-50 text-green-600 scale-110' : scanError ? 'bg-red-50 text-red-600' : 'bg-indigo-50 text-indigo-600'
+                  isUnlocking
+                    ? 'bg-green-50 text-green-600 scale-110'
+                    : scanError
+                    ? 'bg-red-50 text-red-600'
+                    : 'bg-indigo-50 text-indigo-600'
                 }`}
               >
-                {isUnlocking ? <Unlock size={64} className="animate-bounce" /> : <Fingerprint size={64} className="animate-pulse" />}
+                {isUnlocking ? (
+                  <Unlock size={64} className="animate-bounce" />
+                ) : (
+                  <Fingerprint size={64} className="animate-pulse" />
+                )}
               </div>
+
               {!isUnlocking && !scanError && (
                 <div className="absolute inset-0 rounded-full border-4 border-indigo-600 border-t-transparent animate-spin"></div>
               )}
+
               {scanError && (
-                <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-2 text-red-600 font-black text-xs">
+                <div className="absolute -bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-2 text-red-600 font-black text-xs text-center">
                   <XCircle size={16} /> {scanError}
                 </div>
               )}
@@ -210,16 +227,23 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                 </div>
               ) : (
                 <div className="text-center text-[10px] font-black uppercase tracking-widest text-gray-400">
-                  Waiting for scan from ESP32…
+                  Waiting for new scan from ESP32…
                   <div className="mt-2 text-[11px] font-black text-gray-700 normal-case">
-                    Selected user fingerprint ID: <span className="font-black">{String((selectedUser as any)?.fingerprintId ?? '—')}</span>
+                    Selected user fingerprint ID:{' '}
+                    <span className="font-black">
+                      {String(selectedUser?.fingerprintId ?? '—')}
+                    </span>
                   </div>
                 </div>
               )}
 
               {!isUnlocking && (
                 <button
-                  onClick={() => setShowScanUI(false)}
+                  onClick={() => {
+                    setShowScanUI(false);
+                    setScanError('');
+                    setScanMessage('Place finger on scanner…');
+                  }}
                   className="py-2 text-gray-400 font-bold uppercase tracking-widest text-[10px]"
                 >
                   Cancel
@@ -239,14 +263,18 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         {!isIdentified ? (
           <div className="space-y-6">
             <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-2">Identify User</label>
+              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-2">
+                Identify User
+              </label>
               <select
                 value={selectedUserId}
                 onChange={(e) => setSelectedUserId(e.target.value)}
                 className="w-full px-5 py-4.5 bg-gray-50 border-2 border-indigo-100 rounded-2xl font-black text-sm text-gray-900 focus:bg-white focus:border-indigo-500 transition-all outline-none"
               >
-                <option value="" className="text-gray-400 font-bold">Choose registered user</option>
-                {users.map(u => (
+                <option value="" className="text-gray-400 font-bold">
+                  Choose registered user
+                </option>
+                {users.map((u) => (
                   <option key={u.id} value={u.id} className="text-gray-900 font-bold bg-white">
                     {u.fullName}
                   </option>
@@ -255,21 +283,41 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
             </div>
 
             <div className="space-y-2">
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-2">Year & Section</label>
+              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-2">
+                Year & Section
+              </label>
               <select
                 value={selectedYearSection}
                 onChange={(e) => setSelectedYearSection(e.target.value as YearSection)}
                 className="w-full px-5 py-4.5 bg-gray-50 border-2 border-indigo-100 rounded-2xl font-black text-sm text-gray-900 focus:bg-white focus:border-indigo-500 transition-all outline-none"
               >
-                <option value="" className="text-gray-400 font-bold">Select current section</option>
-                <option value="1st Year - Day" className="text-gray-900 font-bold bg-white">1st Year - Day</option>
-                <option value="1st Year - Night" className="text-gray-900 font-bold bg-white">1st Year - Night</option>
-                <option value="2nd Year - Day" className="text-gray-900 font-bold bg-white">2nd Year - Day</option>
-                <option value="2nd Year - Night" className="text-gray-900 font-bold bg-white">2nd Year - Night</option>
-                <option value="3rd Year - Day" className="text-gray-900 font-bold bg-white">3rd Year - Day</option>
-                <option value="3rd Year - Night" className="text-gray-900 font-bold bg-white">3rd Year - Night</option>
-                <option value="4th Year - Day" className="text-gray-900 font-bold bg-white">4th Year - Day</option>
-                <option value="4th Year - Night" className="text-gray-900 font-bold bg-white">4th Year - Night</option>
+                <option value="" className="text-gray-400 font-bold">
+                  Select current section
+                </option>
+                <option value="1st Year - Day" className="text-gray-900 font-bold bg-white">
+                  1st Year - Day
+                </option>
+                <option value="1st Year - Night" className="text-gray-900 font-bold bg-white">
+                  1st Year - Night
+                </option>
+                <option value="2nd Year - Day" className="text-gray-900 font-bold bg-white">
+                  2nd Year - Day
+                </option>
+                <option value="2nd Year - Night" className="text-gray-900 font-bold bg-white">
+                  2nd Year - Night
+                </option>
+                <option value="3rd Year - Day" className="text-gray-900 font-bold bg-white">
+                  3rd Year - Day
+                </option>
+                <option value="3rd Year - Night" className="text-gray-900 font-bold bg-white">
+                  3rd Year - Night
+                </option>
+                <option value="4th Year - Day" className="text-gray-900 font-bold bg-white">
+                  4th Year - Day
+                </option>
+                <option value="4th Year - Night" className="text-gray-900 font-bold bg-white">
+                  4th Year - Night
+                </option>
               </select>
             </div>
           </div>
@@ -297,15 +345,21 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
             {currentUserBorrow ? (
               <div className="w-full p-6 bg-amber-50 rounded-[2rem] border-2 border-dashed border-amber-200 text-center">
-                <p className="text-[10px] text-amber-900 font-black uppercase mb-1">Active Possession</p>
-                <p className="text-5xl font-black text-amber-600">{currentUserBorrow.keyNumber.replace('Key-', '#')}</p>
+                <p className="text-[10px] text-amber-900 font-black uppercase mb-1">
+                  Active Possession
+                </p>
+                <p className="text-5xl font-black text-amber-600">
+                  {currentUserBorrow.keyNumber.replace('Key-', '#')}
+                </p>
               </div>
             ) : (
               <div className="w-full space-y-3">
-                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-2">Available Slots</label>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-2">
+                  Available Slots
+                </label>
                 <div className="grid grid-cols-5 gap-2">
-                  {keys.map(keyNum => {
-                    const isBorrowed = activeBorrows.some(b => b.keyNumber === keyNum);
+                  {keys.map((keyNum) => {
+                    const isBorrowed = activeBorrows.some((b) => b.keyNumber === keyNum);
                     return (
                       <button
                         key={keyNum}
@@ -330,7 +384,9 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
             <button
               onClick={initiateAction}
               className={`w-full py-5 rounded-2xl font-black text-base shadow-xl transition-all flex items-center justify-center gap-3 uppercase tracking-widest ${
-                currentUserBorrow ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                currentUserBorrow
+                  ? 'bg-amber-500 text-white hover:bg-amber-600'
+                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
               }`}
             >
               <Fingerprint size={22} />
