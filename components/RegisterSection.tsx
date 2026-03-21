@@ -1,20 +1,14 @@
-import React, { useMemo, useRef, useState, useEffect } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { Program, Position, YearSection, User } from '../types';
-import { Camera, Fingerprint, UserPlus, Trash2, CheckCircle2, XCircle } from 'lucide-react';
+import { Camera, Fingerprint, UserPlus, Trash2, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { supabase, SUPABASE_CONFIGURED } from '../supabase';
 
 interface RegisterSectionProps {
   onRegister: (user: User) => void;
   users: User[];
-  lastScan?: {
-    id?: string | number;
-    fingerprint_id: string;
-    device_id?: string;
-    action?: string;
-    created_at?: string;
-  } | null;
 }
 
-const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, lastScan }) => {
+const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) => {
   const [fullName, setFullName] = useState('');
   const [program, setProgram] = useState<Program | ''>('');
   const [position, setPosition] = useState<Position | ''>('');
@@ -24,11 +18,9 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, la
 
   const [fingerprintReady, setFingerprintReady] = useState(false);
   const [assignedFingerprintId, setAssignedFingerprintId] = useState<string>('');
-  const [scanMessage, setScanMessage] = useState('Click the button to start fingerprint scan.');
-  const [lastHandledScanId, setLastHandledScanId] = useState<string | number | null>(null);
-  const [isWaitingForFingerprint, setIsWaitingForFingerprint] = useState(false);
-  const [scanStartTime, setScanStartTime] = useState<number>(0);
+  const [scanMessage, setScanMessage] = useState('Click to enroll fingerprint.');
   const [scanError, setScanError] = useState('');
+  const [isWaitingForFingerprint, setIsWaitingForFingerprint] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -39,7 +31,6 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, la
       .filter((id) => Number.isFinite(id) && id > 0);
 
     if (numericIds.length === 0) return 1;
-
     return Math.max(...numericIds) + 1;
   }, [users]);
 
@@ -77,14 +68,101 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, la
     }
   };
 
-  const prepareFingerprintEnroll = () => {
+  const waitForCommandResult = async (commandId: string, timeoutMs = 30000) => {
+    const started = Date.now();
+
+    while (Date.now() - started < timeoutMs) {
+      const { data, error } = await supabase
+        .from('device_commands')
+        .select('processed,result,enrolled_fingerprint_id')
+        .eq('id', commandId)
+        .single();
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (data?.processed) {
+        return data;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+
+    throw new Error('Command timeout.');
+  };
+
+  const prepareFingerprintEnroll = async () => {
+    if (!SUPABASE_CONFIGURED) {
+      alert('Supabase is not configured.');
+      return;
+    }
+
+    const alreadyUsed = users.some(
+      (user) => Number(user.fingerprintId) === nextFingerprintId
+    );
+
+    if (alreadyUsed) {
+      setScanError(`Fingerprint ID ${nextFingerprintId} is already used.`);
+      setScanMessage(`Fingerprint ID ${nextFingerprintId} is already used.`);
+      return;
+    }
+
     setFingerprintReady(false);
     setAssignedFingerprintId('');
     setScanError('');
-    setLastHandledScanId(null);
-    setScanStartTime(Date.now());
     setIsWaitingForFingerprint(true);
-    setScanMessage('Waiting for a new fingerprint scan...');
+    setScanMessage(`Waiting for ESP32 to enroll fingerprint ID ${nextFingerprintId}...`);
+
+    try {
+      const { data, error } = await supabase
+        .from('device_commands')
+        .insert({
+          device_id: 'locker_1',
+          action: 'enroll_fingerprint',
+          enroll_fingerprint_id: nextFingerprintId,
+          processed: false,
+          result: 'pending'
+        })
+        .select('id')
+        .single();
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      const result = await waitForCommandResult(data.id, 45000);
+
+      if (result.result === 'enrolled') {
+        const enrolledId = String(result.enrolled_fingerprint_id ?? nextFingerprintId);
+        setAssignedFingerprintId(enrolledId);
+        setFingerprintReady(true);
+        setScanError('');
+        setScanMessage(`Fingerprint enrolled successfully. ID ${enrolledId}`);
+      } else if (result.result === 'enroll_failed') {
+        setFingerprintReady(false);
+        setAssignedFingerprintId('');
+        setScanError('ESP32 failed to enroll fingerprint.');
+        setScanMessage('Fingerprint enroll failed. Try again.');
+      } else if (result.result === 'timeout') {
+        setFingerprintReady(false);
+        setAssignedFingerprintId('');
+        setScanError('Enroll timeout.');
+        setScanMessage('Enroll timeout. Please try again.');
+      } else {
+        setFingerprintReady(false);
+        setAssignedFingerprintId('');
+        setScanError(`Unexpected result: ${result.result}`);
+        setScanMessage(`Unexpected result: ${result.result}`);
+      }
+    } catch (err: any) {
+      setFingerprintReady(false);
+      setAssignedFingerprintId('');
+      setScanError(err.message || 'Failed to enroll fingerprint.');
+      setScanMessage(err.message || 'Failed to enroll fingerprint.');
+    } finally {
+      setIsWaitingForFingerprint(false);
+    }
   };
 
   const handleRegister = () => {
@@ -108,13 +186,17 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, la
       return;
     }
 
-    if (!assignedFingerprintId) {
-      alert('Please scan a fingerprint first.');
+    if (!assignedFingerprintId || !fingerprintReady) {
+      alert('Please enroll fingerprint first.');
       return;
     }
 
-    if (!fingerprintReady) {
-      alert('Please finish the fingerprint scan first.');
+    const duplicate = users.some(
+      (user) => String(user.fingerprintId).trim() === assignedFingerprintId.trim()
+    );
+
+    if (duplicate) {
+      alert(`Fingerprint ID ${assignedFingerprintId} is already registered.`);
       return;
     }
 
@@ -139,62 +221,8 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, la
     setAssignedFingerprintId('');
     setIsWaitingForFingerprint(false);
     setScanError('');
-    setLastHandledScanId(null);
-    setScanMessage('Click the button to start fingerprint scan.');
+    setScanMessage('Click to enroll fingerprint.');
   };
-
-  useEffect(() => {
-    if (!isWaitingForFingerprint) return;
-    if (!lastScan) return;
-    if (!lastScan.created_at) return;
-
-    const scanTime = new Date(lastScan.created_at).getTime();
-
-    // Ignore old scans before the user clicked the button
-    if (scanTime < scanStartTime) return;
-
-    // Avoid handling the same scan repeatedly
-    if (lastScan.id != null && lastHandledScanId === lastScan.id) return;
-
-    if (lastScan.id != null) {
-      setLastHandledScanId(lastScan.id);
-    }
-
-    const scannedId = String(lastScan.fingerprint_id ?? '').trim();
-    if (!scannedId) return;
-
-    const alreadyUsed = users.some(
-      (user) => String(user.fingerprintId ?? '').trim() === scannedId
-    );
-
-    if (alreadyUsed) {
-      setFingerprintReady(false);
-      setAssignedFingerprintId('');
-      setScanError(`Fingerprint ID ${scannedId} is already registered.`);
-      setScanMessage(`Fingerprint ID ${scannedId} is already registered.`);
-      return;
-    }
-
-    setAssignedFingerprintId(scannedId);
-    setFingerprintReady(true);
-    setIsWaitingForFingerprint(false);
-    setScanError('');
-    setScanMessage(`Fingerprint detected: ID ${scannedId}`);
-  }, [lastScan, lastHandledScanId, users, isWaitingForFingerprint, scanStartTime]);
-
-  useEffect(() => {
-    if (!isWaitingForFingerprint) return;
-
-    const timeout = setTimeout(() => {
-      setIsWaitingForFingerprint(false);
-      setFingerprintReady(false);
-      setAssignedFingerprintId('');
-      setScanError('No new fingerprint scan detected.');
-      setScanMessage('Scan timeout. Please click again and scan your finger.');
-    }, 15000);
-
-    return () => clearTimeout(timeout);
-  }, [isWaitingForFingerprint]);
 
   return (
     <div className="bg-white rounded-[2rem] shadow-xl p-8 max-w-md mx-auto space-y-6">
@@ -278,9 +306,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, la
               onChange={(e) => setProgram(e.target.value as Program)}
               className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black appearance-none"
             >
-              <option value="" className="text-gray-400">
-                Select your course
-              </option>
+              <option value="" className="text-gray-400">Select your course</option>
               <option value="BSCE" className="text-gray-900">BSCE</option>
               <option value="BSEE" className="text-gray-900">BSEE</option>
               <option value="BSME" className="text-gray-900">BSME</option>
@@ -298,9 +324,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, la
               onChange={(e) => setPosition(e.target.value as Position)}
               className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black appearance-none"
             >
-              <option value="" className="text-gray-400">
-                Select position
-              </option>
+              <option value="" className="text-gray-400">Select position</option>
               <option value="Instructor" className="text-gray-900">Instructor</option>
               <option value="Class Mayor" className="text-gray-900">Class Mayor</option>
             </select>
@@ -315,16 +339,19 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, la
         <div className="space-y-2 pt-2">
           <button
             onClick={prepareFingerprintEnroll}
+            disabled={isWaitingForFingerprint}
             className={`w-full py-4 rounded-2xl border-2 flex items-center justify-center gap-3 transition-all ${
               fingerprintReady
                 ? 'border-green-300 bg-green-50 text-green-800'
                 : isWaitingForFingerprint
                 ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
                 : 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
-            }`}
+            } ${isWaitingForFingerprint ? 'opacity-80 cursor-not-allowed' : ''}`}
           >
             {fingerprintReady ? (
               <CheckCircle2 size={24} />
+            ) : isWaitingForFingerprint ? (
+              <Loader2 size={24} className="animate-spin" />
             ) : scanError ? (
               <XCircle size={24} />
             ) : (
@@ -333,10 +360,10 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users, la
 
             <span className="font-black uppercase tracking-widest text-xs">
               {fingerprintReady
-                ? 'Fingerprint Detected'
+                ? 'Fingerprint Enrolled'
                 : isWaitingForFingerprint
-                ? 'Waiting for Fingerprint'
-                : 'Scan Fingerprint'}
+                ? 'Enrolling Fingerprint'
+                : 'Enroll Fingerprint'}
             </span>
           </button>
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, HistoryItem, Tab } from './types';
 import RegisterSection from './components/RegisterSection';
 import KeylockerSection from './components/KeylockerSection';
@@ -8,31 +8,12 @@ import BottomNav from './components/BottomNav';
 import { Key, Loader2, AlertTriangle, ExternalLink } from 'lucide-react';
 import { supabase, SUPABASE_CONFIGURED } from './supabase';
 
-type ScanRow = {
-  id?: string | number;
-  fingerprint_id: string;
-  device_id?: string;
-  action?: string;
-  created_at?: string;
-};
-
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('Register');
   const [users, setUsers] = useState<User[]>([]);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showSplash, setShowSplash] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
-
-  // Latest scan from Supabase
-  const [lastScan, setLastScan] = useState<ScanRow | null>(null);
-
-  // Prevent duplicate scan updates from polling + realtime
-  const lastSeenScanKeyRef = useRef<string>('');
-
-  const makeScanKey = (row: Partial<ScanRow> | null | undefined) => {
-    if (!row) return '';
-    return `${row.id ?? ''}_${row.fingerprint_id ?? ''}_${row.created_at ?? ''}`;
-  };
 
   const fetchUsers = async () => {
     if (!SUPABASE_CONFIGURED) return;
@@ -100,49 +81,12 @@ const App: React.FC = () => {
     setHistory(transformedHistory);
   };
 
-  const fetchLatestScan = async () => {
-    if (!SUPABASE_CONFIGURED) return;
-
-    const { data, error } = await supabase
-      .from('scans')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (error) {
-      console.error('Error fetching latest scan:', error);
-      return;
-    }
-
-    if (!data) return;
-
-    const normalizedScan: ScanRow = {
-      id: data.id ?? Date.now(),
-      fingerprint_id: String(data.fingerprint_id ?? '').trim(),
-      device_id: data.device_id,
-      action: data.action,
-      created_at: data.created_at
-    };
-
-    const newScanKey = makeScanKey(normalizedScan);
-
-    if (!newScanKey) return;
-    if (lastSeenScanKeyRef.current === newScanKey) return;
-
-    lastSeenScanKeyRef.current = newScanKey;
-    setLastScan(normalizedScan);
-    console.log('Latest scan fetched/polled:', normalizedScan);
-  };
-
   useEffect(() => {
     const splashTimer = setTimeout(() => setShowSplash(false), 2500);
 
     if (SUPABASE_CONFIGURED) {
       setIsLoading(true);
-      Promise.all([fetchUsers(), fetchHistory(), fetchLatestScan()]).finally(() =>
-        setIsLoading(false)
-      );
+      Promise.all([fetchUsers(), fetchHistory()]).finally(() => setIsLoading(false));
     }
 
     return () => clearTimeout(splashTimer);
@@ -156,10 +100,6 @@ const App: React.FC = () => {
     if (activeTab === 'Keylocker') {
       fetchUsers();
       fetchHistory();
-      fetchLatestScan();
-    }
-    if (activeTab === 'Register') {
-      fetchLatestScan();
     }
   }, [activeTab]);
 
@@ -194,48 +134,9 @@ const App: React.FC = () => {
         console.log('Logs channel status:', status);
       });
 
-    const scansChannel = supabase
-      .channel('realtime-scans')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'scans' },
-        async (payload) => {
-          console.log('Scan payload:', payload);
-
-          const row = payload.new as ScanRow;
-
-          const normalizedScan: ScanRow = {
-            id: row.id ?? Date.now(),
-            fingerprint_id: String(row.fingerprint_id ?? '').trim(),
-            device_id: row.device_id,
-            action: row.action,
-            created_at: row.created_at
-          };
-
-          const newScanKey = makeScanKey(normalizedScan);
-
-          if (newScanKey && lastSeenScanKeyRef.current !== newScanKey) {
-            lastSeenScanKeyRef.current = newScanKey;
-            setLastScan(normalizedScan);
-          }
-
-          await Promise.all([fetchUsers(), fetchHistory()]);
-        }
-      )
-      .subscribe((status) => {
-        console.log('Scans channel status:', status);
-      });
-
-    // Fallback polling in case realtime websocket fails
-    const scanPoller = window.setInterval(async () => {
-      await fetchLatestScan();
-    }, 2000);
-
     return () => {
-      window.clearInterval(scanPoller);
       supabase.removeChannel(usersChannel);
       supabase.removeChannel(logsChannel);
-      supabase.removeChannel(scansChannel);
     };
   }, []);
 
@@ -364,7 +265,6 @@ const App: React.FC = () => {
           <RegisterSection
             onRegister={handleRegister}
             users={users}
-            lastScan={lastScan}
           />
         );
 
@@ -375,7 +275,6 @@ const App: React.FC = () => {
             history={history}
             onBorrow={handleBorrow}
             onReturn={handleReturn}
-            lastScan={lastScan}
           />
         );
 
@@ -390,7 +289,6 @@ const App: React.FC = () => {
           <RegisterSection
             onRegister={handleRegister}
             users={users}
-            lastScan={lastScan}
           />
         );
     }
@@ -441,19 +339,7 @@ const App: React.FC = () => {
           </h1>
         </div>
 
-        <div className="flex items-center gap-2">
-          {lastScan?.fingerprint_id ? (
-            <div
-              className={`text-xs font-black px-3 py-1.5 rounded-full ${
-                activeTab === 'History'
-                  ? 'bg-white/10 text-white'
-                  : 'bg-emerald-50 text-emerald-700'
-              }`}
-            >
-              Scan: ID {lastScan.fingerprint_id}
-            </div>
-          ) : null}
-
+        <div>
           <div
             className={`text-xs font-black px-3 py-1.5 rounded-full ${
               activeTab === 'History'
