@@ -8,6 +8,15 @@ import BottomNav from './components/BottomNav';
 import { Key, Loader2, AlertTriangle, ExternalLink } from 'lucide-react';
 import { supabase, SUPABASE_CONFIGURED } from './supabase';
 
+// ✅ Added: Web Crypto hash for backup PIN
+async function hashPin(pin: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(pin);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('Register');
   const [users, setUsers] = useState<User[]>([]);
@@ -158,7 +167,7 @@ const App: React.FC = () => {
     throw new Error('Command timeout.');
   };
 
-  // secure register through edge function
+  // ✅ Updated: direct register with hashed PIN, no Edge Function
   const handleRegister = async (newUser: User & { backupPin?: string }) => {
     if (!SUPABASE_CONFIGURED) {
       alert('Supabase is not configured.');
@@ -172,27 +181,29 @@ const App: React.FC = () => {
         throw new Error('Backup PIN is required.');
       }
 
-      const { data, error } = await supabase.functions.invoke('register-user-secure', {
-        body: {
-          fullName: newUser.fullName,
+      const pinHash = await hashPin(newUser.backupPin);
+
+      const { error } = await supabase
+        .from('registered_users')
+        .insert({
+          full_name: newUser.fullName,
           program: newUser.program,
           position: newUser.position,
-          photoUrl: newUser.photoUrl,
-          fingerprintId: newUser.fingerprintId,
-          backupPin: newUser.backupPin
-        }
-      });
+          photo_url: newUser.photoUrl,
+          fingerprint_id: Number(newUser.fingerprintId),
+          pin_hash: pinHash
+        });
 
-      if (error) throw new Error(error.message);
-      if (!data?.success) throw new Error(data?.error || 'Registration failed.');
+      if (error) throw error;
 
       await fetchUsers();
       setActiveTab('Keylocker');
+      alert('User registered successfully.');
     } catch (err: any) {
       alert(err.message || 'Failed to register user.');
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   const handleBorrow = async (item: HistoryItem) => {
