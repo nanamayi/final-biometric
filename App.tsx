@@ -8,7 +8,6 @@ import BottomNav from './components/BottomNav';
 import { Key, Loader2, AlertTriangle, ExternalLink } from 'lucide-react';
 import { supabase, SUPABASE_CONFIGURED } from './supabase';
 
-// ✅ Added: Web Crypto hash for backup PIN
 async function hashPin(pin: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(pin);
@@ -143,50 +142,6 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const waitForCommandResult = async (commandId: string, timeoutMs = 30000) => {
-    const started = Date.now();
-
-    while (Date.now() - started < timeoutMs) {
-      const { data, error } = await supabase
-        .from('device_commands')
-        .select('processed,result,scanned_fingerprint_id')
-        .eq('id', commandId)
-        .single();
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      if (data?.processed) {
-        return data;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-    }
-
-    throw new Error('Command timeout.');
-  };
-
-  const getVerificationErrorMessage = (
-    result: { result?: string; scanned_fingerprint_id?: number | null },
-    expectedFingerprintId?: string
-  ) => {
-    if (result.result === 'timeout') {
-      return 'Fingerprint scan timed out. Please place your finger properly and try again.';
-    }
-
-    if (result.result === 'mismatch') {
-      return `Fingerprint mismatch. Expected ID: ${expectedFingerprintId ?? 'Unknown'}, Scanned ID: ${result.scanned_fingerprint_id ?? 'Unknown'}`;
-    }
-
-    if (result.result === 'unsupported_action') {
-      return 'Unsupported device action.';
-    }
-
-    return `Verification failed: ${result.result ?? 'Unknown error'}`;
-  };
-
-  // ✅ direct register with hashed PIN, no Edge Function
   const handleRegister = async (newUser: User & { backupPin?: string }) => {
     if (!SUPABASE_CONFIGURED) {
       alert('Supabase is not configured.');
@@ -226,80 +181,81 @@ const App: React.FC = () => {
   };
 
   const handleBorrow = async (item: HistoryItem) => {
-  if (!SUPABASE_CONFIGURED) return;
+    if (!SUPABASE_CONFIGURED) return;
 
-  setIsLoading(true);
+    setIsLoading(true);
 
-  try {
-    const { data: activeBorrow, error: activeBorrowError } = await supabase
-      .from('key_logs')
-      .select('id, key_number')
-      .eq('user_id', item.userId)
-      .eq('status', 'Borrowed')
-      .is('time_out', null)
-      .maybeSingle();
+    try {
+      const { data: activeBorrow, error: activeBorrowError } = await supabase
+        .from('key_logs')
+        .select('id, key_number')
+        .eq('user_id', item.userId)
+        .eq('status', 'Borrowed')
+        .is('time_out', null)
+        .maybeSingle();
 
-    if (activeBorrowError) throw activeBorrowError;
+      if (activeBorrowError) throw activeBorrowError;
 
-    if (activeBorrow) {
-      throw new Error(`User still has an unreturned key: ${activeBorrow.key_number}`);
+      if (activeBorrow) {
+        throw new Error(`User still has an unreturned key: ${activeBorrow.key_number}`);
+      }
+
+      const { data: activeKey, error: activeKeyError } = await supabase
+        .from('key_logs')
+        .select('id')
+        .eq('key_number', item.keyNumber)
+        .eq('status', 'Borrowed')
+        .is('time_out', null)
+        .maybeSingle();
+
+      if (activeKeyError) throw activeKeyError;
+
+      if (activeKey) {
+        throw new Error('This key is already borrowed.');
+      }
+
+      const { error } = await supabase.from('key_logs').insert({
+        user_id: item.userId,
+        year_section: item.yearSection,
+        key_number: item.keyNumber,
+        status: 'Borrowed',
+        time_in: new Date().toISOString()
+      });
+
+      if (error) throw error;
+
+      await fetchHistory();
+    } catch (err: any) {
+      alert(err.message || 'Failed to borrow key.');
+    } finally {
+      setIsLoading(false);
     }
-
-    const { data: activeKey, error: activeKeyError } = await supabase
-      .from('key_logs')
-      .select('id')
-      .eq('key_number', item.keyNumber)
-      .eq('status', 'Borrowed')
-      .is('time_out', null)
-      .maybeSingle();
-
-    if (activeKeyError) throw activeKeyError;
-
-    if (activeKey) {
-      throw new Error('This key is already borrowed.');
-    }
-
-    const { error } = await supabase.from('key_logs').insert({
-      user_id: item.userId,
-      year_section: item.yearSection,
-      key_number: item.keyNumber,
-      status: 'Borrowed',
-      time_in: new Date().toISOString()
-    });
-
-    if (error) throw error;
-
-    await fetchHistory();
-  } catch (err: any) {
-    alert(err.message || 'Failed to borrow key.');
-  } finally {
-    setIsLoading(false);
-  }
-};
+  };
 
   const handleReturn = async (logId: string) => {
-  if (!SUPABASE_CONFIGURED) return;
+    if (!SUPABASE_CONFIGURED) return;
 
-  setIsLoading(true);
+    setIsLoading(true);
 
-  try {
-    const { error: updateError } = await supabase
-      .from('key_logs')
-      .update({
-        status: 'Returned',
-        time_out: new Date().toISOString()
-      })
-      .eq('id', logId);
+    try {
+      const { error: updateError } = await supabase
+        .from('key_logs')
+        .update({
+          status: 'Returned',
+          time_out: new Date().toISOString()
+        })
+        .eq('id', logId);
 
-    if (updateError) throw updateError;
+      if (updateError) throw updateError;
 
-    await fetchHistory();
-  } catch (err: any) {
-    alert(err.message || 'Failed to return key.');
-  } finally {
-    setIsLoading(false);
-  }
-};
+      await fetchHistory();
+    } catch (err: any) {
+      alert(err.message || 'Failed to return key.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const renderContent = () => {
     if (!SUPABASE_CONFIGURED) {
       return (
