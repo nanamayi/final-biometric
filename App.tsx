@@ -167,6 +167,25 @@ const App: React.FC = () => {
     throw new Error('Command timeout.');
   };
 
+  const getVerificationErrorMessage = (
+    result: { result?: string; scanned_fingerprint_id?: number | null },
+    expectedFingerprintId?: string
+  ) => {
+    if (result.result === 'timeout') {
+      return 'Fingerprint scan timed out. Please place your finger properly and try again.';
+    }
+
+    if (result.result === 'mismatch') {
+      return `Fingerprint mismatch. Expected ID: ${expectedFingerprintId ?? 'Unknown'}, Scanned ID: ${result.scanned_fingerprint_id ?? 'Unknown'}`;
+    }
+
+    if (result.result === 'unsupported_action') {
+      return 'Unsupported device action.';
+    }
+
+    return `Verification failed: ${result.result ?? 'Unknown error'}`;
+  };
+
   // ✅ direct register with hashed PIN, no Edge Function
   const handleRegister = async (newUser: User & { backupPin?: string }) => {
     if (!SUPABASE_CONFIGURED) {
@@ -262,7 +281,7 @@ const App: React.FC = () => {
       const result = await waitForCommandResult(data.id, 30000);
 
       if (result.result !== 'matched') {
-        throw new Error('Fingerprint verification failed.');
+        throw new Error(getVerificationErrorMessage(result, user?.fingerprintId));
       }
 
       const { error } = await supabase.from('key_logs').insert({
@@ -310,7 +329,7 @@ const App: React.FC = () => {
       const result = await waitForCommandResult(data.id, 30000);
 
       if (result.result !== 'matched') {
-        throw new Error('Verification failed.');
+        throw new Error(getVerificationErrorMessage(result, user?.fingerprintId));
       }
 
       const { error: updateError } = await supabase
