@@ -167,7 +167,7 @@ const App: React.FC = () => {
     throw new Error('Command timeout.');
   };
 
-  // ✅ Updated: direct register with hashed PIN, no Edge Function
+  // ✅ direct register with hashed PIN, no Edge Function
   const handleRegister = async (newUser: User & { backupPin?: string }) => {
     if (!SUPABASE_CONFIGURED) {
       alert('Supabase is not configured.');
@@ -212,6 +212,36 @@ const App: React.FC = () => {
     setIsLoading(true);
 
     try {
+      // ✅ Prevent user from borrowing another key if previous key is not yet returned
+      const { data: activeBorrow, error: activeBorrowError } = await supabase
+        .from('key_logs')
+        .select('id, key_number')
+        .eq('user_id', item.userId)
+        .eq('status', 'Borrowed')
+        .is('time_out', null)
+        .maybeSingle();
+
+      if (activeBorrowError) throw activeBorrowError;
+
+      if (activeBorrow) {
+        throw new Error(`User still has an unreturned key: ${activeBorrow.key_number}`);
+      }
+
+      // ✅ Prevent same key from being borrowed by another user
+      const { data: activeKey, error: activeKeyError } = await supabase
+        .from('key_logs')
+        .select('id')
+        .eq('key_number', item.keyNumber)
+        .eq('status', 'Borrowed')
+        .is('time_out', null)
+        .maybeSingle();
+
+      if (activeKeyError) throw activeKeyError;
+
+      if (activeKey) {
+        throw new Error('This key is already borrowed.');
+      }
+
       const user = users.find((u) => u.id === item.userId);
 
       const { data, error: cmdError } = await supabase
@@ -248,9 +278,9 @@ const App: React.FC = () => {
       await fetchHistory();
     } catch (err: any) {
       alert(err.message || 'Failed to borrow key.');
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   const handleReturn = async (logId: string) => {
@@ -296,9 +326,9 @@ const App: React.FC = () => {
       await fetchHistory();
     } catch (err: any) {
       alert(err.message || 'Failed to return key.');
+    } finally {
+      setIsLoading(false);
     }
-
-    setIsLoading(false);
   };
 
   const renderContent = () => {
