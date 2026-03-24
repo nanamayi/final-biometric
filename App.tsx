@@ -112,13 +112,10 @@ const App: React.FC = () => {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'registered_users' },
         async () => {
-          console.log('registered_users changed');
           await fetchUsers();
         }
       )
-      .subscribe((status) => {
-        console.log('Users channel status:', status);
-      });
+      .subscribe();
 
     const logsChannel = supabase
       .channel('realtime-key-logs')
@@ -126,13 +123,10 @@ const App: React.FC = () => {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'key_logs' },
         async () => {
-          console.log('key_logs changed');
           await fetchHistory();
         }
       )
-      .subscribe((status) => {
-        console.log('Logs channel status:', status);
-      });
+      .subscribe();
 
     return () => {
       supabase.removeChannel(usersChannel);
@@ -140,7 +134,32 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const handleRegister = async (newUser: User) => {
+  const waitForCommandResult = async (commandId: string, timeoutMs = 30000) => {
+    const started = Date.now();
+
+    while (Date.now() - started < timeoutMs) {
+      const { data, error } = await supabase
+        .from('device_commands')
+        .select('processed,result,scanned_fingerprint_id')
+        .eq('id', commandId)
+        .single();
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (data?.processed) {
+        return data;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+
+    throw new Error('Command timeout.');
+  };
+
+  // secure register through edge function
+  const handleRegister = async (newUser: User & { backupPin?: string }) => {
     if (!SUPABASE_CONFIGURED) {
       alert('Supabase is not configured.');
       return;
@@ -148,19 +167,29 @@ const App: React.FC = () => {
 
     setIsLoading(true);
 
-    const { error } = await supabase.from('registered_users').insert({
-      full_name: newUser.fullName,
-      program: newUser.program,
-      position: newUser.position,
-      photo_url: newUser.photoUrl,
-      fingerprint_id: newUser.fingerprintId
-    });
+    try {
+      if (!newUser.backupPin) {
+        throw new Error('Backup PIN is required.');
+      }
 
-    if (error) {
-      alert('Failed to register: ' + error.message);
-    } else {
+      const { data, error } = await supabase.functions.invoke('register-user-secure', {
+        body: {
+          fullName: newUser.fullName,
+          program: newUser.program,
+          position: newUser.position,
+          photoUrl: newUser.photoUrl,
+          fingerprintId: newUser.fingerprintId,
+          backupPin: newUser.backupPin
+        }
+      });
+
+      if (error) throw new Error(error.message);
+      if (!data?.success) throw new Error(data?.error || 'Registration failed.');
+
       await fetchUsers();
       setActiveTab('Keylocker');
+    } catch (err: any) {
+      alert(err.message || 'Failed to register user.');
     }
 
     setIsLoading(false);
@@ -171,18 +200,43 @@ const App: React.FC = () => {
 
     setIsLoading(true);
 
-    const { error } = await supabase.from('key_logs').insert({
-      user_id: item.userId,
-      year_section: item.yearSection,
-      key_number: item.keyNumber,
-      status: 'Borrowed',
-      time_in: new Date().toISOString()
-    });
+    try {
+      const user = users.find((u) => u.id === item.userId);
 
-    if (error) {
-      alert('Failed to borrow key: ' + error.message);
-    } else {
+      const { data, error: cmdError } = await supabase
+        .from('device_commands')
+        .insert({
+          device_id: 'locker_1',
+          action: 'verify_and_unlock',
+          expected_fingerprint_id: Number(user?.fingerprintId),
+          key_number: item.keyNumber,
+          processed: false,
+          result: 'pending'
+        })
+        .select('id')
+        .single();
+
+      if (cmdError) throw cmdError;
+
+      const result = await waitForCommandResult(data.id, 30000);
+
+      if (result.result !== 'matched') {
+        throw new Error('Fingerprint verification failed.');
+      }
+
+      const { error } = await supabase.from('key_logs').insert({
+        user_id: item.userId,
+        year_section: item.yearSection,
+        key_number: item.keyNumber,
+        status: 'Borrowed',
+        time_in: new Date().toISOString()
+      });
+
+      if (error) throw error;
+
       await fetchHistory();
+    } catch (err: any) {
+      alert(err.message || 'Failed to borrow key.');
     }
 
     setIsLoading(false);
@@ -193,18 +247,44 @@ const App: React.FC = () => {
 
     setIsLoading(true);
 
-    const { error: updateError } = await supabase
-      .from('key_logs')
-      .update({
-        status: 'Returned',
-        time_out: new Date().toISOString()
-      })
-      .eq('id', logId);
+    try {
+      const log = history.find((h) => h.id === logId);
+      const user = users.find((u) => u.id === log?.userId);
 
-    if (updateError) {
-      alert('Failed to return key: ' + updateError.message);
-    } else {
+      const { data, error: cmdError } = await supabase
+        .from('device_commands')
+        .insert({
+          device_id: 'locker_1',
+          action: 'verify_and_unlock',
+          expected_fingerprint_id: Number(user?.fingerprintId),
+          key_number: log?.keyNumber,
+          processed: false,
+          result: 'pending'
+        })
+        .select('id')
+        .single();
+
+      if (cmdError) throw cmdError;
+
+      const result = await waitForCommandResult(data.id, 30000);
+
+      if (result.result !== 'matched') {
+        throw new Error('Verification failed.');
+      }
+
+      const { error: updateError } = await supabase
+        .from('key_logs')
+        .update({
+          status: 'Returned',
+          time_out: new Date().toISOString()
+        })
+        .eq('id', logId);
+
+      if (updateError) throw updateError;
+
       await fetchHistory();
+    } catch (err: any) {
+      alert(err.message || 'Failed to return key.');
     }
 
     setIsLoading(false);

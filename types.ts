@@ -1,4 +1,4 @@
-export type Program = 'BSCE' | 'BSEE' | 'BSME' | 'BSCPE' | 'BSIE';
+export type Program = 'BSCE' | 'BSEE' | 'BSME' | 'BSCPE' | 'BSIE'| 'CME';
 
 export type Position = 'Instructor' | 'Class Mayor';
 

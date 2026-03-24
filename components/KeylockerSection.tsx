@@ -27,6 +27,12 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   const [scanMessage, setScanMessage] = useState<string>('Place finger on scanner…');
   const [scanError, setScanError] = useState<string>('');
 
+  // ✅ NEW: PIN fallback states
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const [showPinInput, setShowPinInput] = useState(false);
+  const [enteredPin, setEnteredPin] = useState('');
+  const [isVerifyingPin, setIsVerifyingPin] = useState(false);
+
   const keys = Array.from({ length: 20 }, (_, i) => `Key-${100 + i + 1}`);
   const activeBorrows = useMemo(() => history.filter(h => h.status === 'Borrowed'), [history]);
 
@@ -101,9 +107,50 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     setIsUnlocking(false);
     setIsWaitingForDevice(false);
     setShowScanUI(false);
+    setShowPinInput(false);
+    setEnteredPin('');
+    setFailedAttempts(0);
     setScanMessage('Place finger on scanner…');
     setScanError('');
     handleReset();
+  };
+
+  // ✅ NEW: verify backup PIN through secure edge function
+  const handlePinVerify = async () => {
+    if (!selectedUser) return;
+
+    if (!enteredPin.trim()) {
+      alert('Please enter your backup PIN.');
+      return;
+    }
+
+    setIsVerifyingPin(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('verify-backup-pin', {
+        body: {
+          userId: selectedUser.id,
+          backupPin: enteredPin
+        }
+      });
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (data?.valid) {
+        setShowPinInput(false);
+        setEnteredPin('');
+        setFailedAttempts(0);
+        executeFinalAction();
+      } else {
+        alert('Wrong PIN.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to verify PIN.');
+    } finally {
+      setIsVerifyingPin(false);
+    }
   };
 
   const initiateAction = async () => {
@@ -157,6 +204,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setScanError('');
         setScanMessage(`Verified (ID ${result.scanned_fingerprint_id ?? selectedUser.fingerprintId})`);
         setIsUnlocking(true);
+        setFailedAttempts(0);
 
         setTimeout(() => {
           executeFinalAction();
@@ -166,18 +214,36 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       }
 
       if (result.result === 'mismatch') {
+        const newAttempts = failedAttempts + 1;
+        setFailedAttempts(newAttempts);
+
         setIsWaitingForDevice(false);
         setIsUnlocking(false);
         setScanError(`Fingerprint mismatch. Scanned ID ${result.scanned_fingerprint_id ?? 'unknown'}.`);
-        setScanMessage('No match. Try again.');
+        setScanMessage(`No match. Attempt ${newAttempts} of 3.`);
+
+        if (newAttempts >= 3) {
+          setShowScanUI(false);
+          setShowPinInput(true);
+        }
+
         return;
       }
 
       if (result.result === 'timeout') {
+        const newAttempts = failedAttempts + 1;
+        setFailedAttempts(newAttempts);
+
         setIsWaitingForDevice(false);
         setIsUnlocking(false);
         setScanError('No fingerprint detected in time.');
-        setScanMessage('Verification timeout.');
+        setScanMessage(`Verification timeout. Attempt ${newAttempts} of 3.`);
+
+        if (newAttempts >= 3) {
+          setShowScanUI(false);
+          setShowPinInput(true);
+        }
+
         return;
       }
 
@@ -198,6 +264,9 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     setSelectedUserId('');
     setSelectedYearSection('');
     setSelectedKey('');
+    setFailedAttempts(0);
+    setShowPinInput(false);
+    setEnteredPin('');
   };
 
   return (
@@ -261,6 +330,9 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                       {String(selectedUser?.fingerprintId ?? '—')}
                     </span>
                   </div>
+                  <div className="mt-2 text-[11px] font-black text-amber-600 normal-case">
+                    Failed attempts: {failedAttempts}/3
+                  </div>
                 </div>
               )}
 
@@ -277,6 +349,49 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                   Close
                 </button>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* ✅ NEW: Backup PIN Modal */}
+        {showPinInput && (
+          <div className="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-8 animate-in fade-in duration-300">
+            <div className="text-center mb-6">
+              <h3 className="text-2xl font-black text-gray-900 uppercase tracking-tight">
+                Enter Backup PIN
+              </h3>
+              <p className="text-gray-500 text-sm font-medium">
+                Fingerprint failed 3 times. Enter your backup PIN to continue.
+              </p>
+            </div>
+
+            <div className="w-full max-w-xs space-y-4">
+              <input
+                type="password"
+                inputMode="numeric"
+                placeholder="Enter PIN"
+                value={enteredPin}
+                onChange={(e) => setEnteredPin(e.target.value.replace(/\D/g, ''))}
+                className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-100 rounded-2xl font-black text-sm text-gray-900 focus:bg-white focus:border-indigo-500 transition-all outline-none text-center tracking-[0.3em]"
+              />
+
+              <button
+                onClick={handlePinVerify}
+                disabled={isVerifyingPin}
+                className="w-full py-4 bg-indigo-600 text-white font-black rounded-2xl shadow-lg hover:bg-indigo-700 transition-all uppercase tracking-wider text-sm disabled:opacity-70"
+              >
+                {isVerifyingPin ? 'Verifying PIN...' : 'Verify PIN'}
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowPinInput(false);
+                  setEnteredPin('');
+                }}
+                className="w-full py-3 text-gray-400 font-bold uppercase tracking-widest text-[10px]"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         )}

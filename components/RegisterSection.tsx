@@ -4,7 +4,7 @@ import { Camera, Fingerprint, UserPlus, Trash2, CheckCircle2, XCircle, Loader2 }
 import { supabase, SUPABASE_CONFIGURED } from '../supabase';
 
 interface RegisterSectionProps {
-  onRegister: (user: User) => void;
+  onRegister: (user: User & { backupPin?: string }) => void;
   users: User[];
 }
 
@@ -21,6 +21,10 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
   const [scanMessage, setScanMessage] = useState('Click to enroll fingerprint.');
   const [scanError, setScanError] = useState('');
   const [isWaitingForFingerprint, setIsWaitingForFingerprint] = useState(false);
+
+  // NEW: backup PIN
+  const [backupPin, setBackupPin] = useState('');
+  const [confirmBackupPin, setConfirmBackupPin] = useState('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -191,6 +195,16 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       return;
     }
 
+    if (!/^\d{4,6}$/.test(backupPin)) {
+      alert('Backup PIN must be 4 to 6 digits.');
+      return;
+    }
+
+    if (backupPin !== confirmBackupPin) {
+      alert('Backup PIN does not match.');
+      return;
+    }
+
     const duplicate = users.some(
       (user) => String(user.fingerprintId).trim() === assignedFingerprintId.trim()
     );
@@ -211,7 +225,10 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       registeredAt: Date.now(),
     };
 
-    onRegister(newUser);
+    onRegister({
+      ...newUser,
+      backupPin
+    });
 
     setFullName('');
     setProgram('');
@@ -222,6 +239,8 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     setIsWaitingForFingerprint(false);
     setScanError('');
     setScanMessage('Click to enroll fingerprint.');
+    setBackupPin('');
+    setConfirmBackupPin('');
   };
 
   return (
@@ -312,6 +331,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
               <option value="BSME" className="text-gray-900">BSME</option>
               <option value="BSCPE" className="text-gray-900">BSCPE</option>
               <option value="BSIE" className="text-gray-900">BSIE</option>
+              <option value="CME" className="text-gray-900">CME</option>
             </select>
           </div>
 
@@ -328,6 +348,34 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
               <option value="Instructor" className="text-gray-900">Instructor</option>
               <option value="Class Mayor" className="text-gray-900">Class Mayor</option>
             </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-black text-gray-500 uppercase tracking-widest block mb-1.5 ml-1">
+              Backup PIN
+            </label>
+            <input
+              type="password"
+              inputMode="numeric"
+              placeholder="Enter 4 to 6 digit PIN"
+              value={backupPin}
+              onChange={(e) => setBackupPin(e.target.value.replace(/\D/g, ''))}
+              className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black placeholder-gray-400"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-black text-gray-500 uppercase tracking-widest block mb-1.5 ml-1">
+              Confirm Backup PIN
+            </label>
+            <input
+              type="password"
+              inputMode="numeric"
+              placeholder="Confirm your PIN"
+              value={confirmBackupPin}
+              onChange={(e) => setConfirmBackupPin(e.target.value.replace(/\D/g, ''))}
+              className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black placeholder-gray-400"
+            />
           </div>
 
           <div className="hidden">
