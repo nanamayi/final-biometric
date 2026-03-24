@@ -27,7 +27,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   const [scanMessage, setScanMessage] = useState<string>('Place finger on scanner…');
   const [scanError, setScanError] = useState<string>('');
 
-  // ✅ NEW: PIN fallback states
   const [failedAttempts, setFailedAttempts] = useState(0);
   const [showPinInput, setShowPinInput] = useState(false);
   const [enteredPin, setEnteredPin] = useState('');
@@ -115,7 +114,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     handleReset();
   };
 
-  // ✅ NEW: verify backup PIN through secure edge function
   const handlePinVerify = async () => {
     if (!selectedUser) return;
 
@@ -254,8 +252,25 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     } catch (err: any) {
       setIsWaitingForDevice(false);
       setIsUnlocking(false);
-      setScanError(err.message || 'Failed to communicate with device.');
-      setScanMessage(err.message || 'Failed to communicate with device.');
+
+      const message = err.message || 'Failed to communicate with device.';
+
+      if (message === 'Command timeout.') {
+        const newAttempts = failedAttempts + 1;
+        setFailedAttempts(newAttempts);
+        setScanError('No response from device in time.');
+        setScanMessage(`Verification timeout. Attempt ${newAttempts} of 3.`);
+
+        if (newAttempts >= 3) {
+          setShowScanUI(false);
+          setShowPinInput(true);
+        }
+
+        return;
+      }
+
+      setScanError(message);
+      setScanMessage(message);
     }
   };
 
@@ -353,7 +368,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
           </div>
         )}
 
-        {/* ✅ NEW: Backup PIN Modal */}
         {showPinInput && (
           <div className="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-8 animate-in fade-in duration-300">
             <div className="text-center mb-6">
