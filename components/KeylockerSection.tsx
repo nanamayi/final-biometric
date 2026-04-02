@@ -55,8 +55,13 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     return !!selectedYearSection;
   }, [selectedUser, currentUserBorrow, selectedYearSection]);
 
-  const waitForCommandResult = async (commandId: string, timeoutMs = 30000) => {
+  const waitForCommandResult = async (
+    commandId: string,
+    timeoutMs = 45000,
+    pollMs = 1500
+  ) => {
     const started = Date.now();
+    let lastKnownResult = 'pending';
 
     while (Date.now() - started < timeoutMs) {
       const { data, error } = await supabase
@@ -69,14 +74,29 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         throw new Error(error.message);
       }
 
+      if (data?.result) {
+        lastKnownResult = data.result;
+      }
+
       if (data?.processed) {
         return data;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
 
-    throw new Error('Command timeout.');
+    throw new Error(`Command timeout. Last result: ${lastKnownResult}`);
+  };
+
+  const resetScanState = () => {
+    setIsUnlocking(false);
+    setIsWaitingForDevice(false);
+    setShowScanUI(false);
+    setShowPinInput(false);
+    setEnteredPin('');
+    setFailedAttempts(0);
+    setScanMessage('Place finger on scanner…');
+    setScanError('');
   };
 
   const executeFinalAction = () => {
@@ -103,14 +123,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       onBorrow(newHistoryItem);
     }
 
-    setIsUnlocking(false);
-    setIsWaitingForDevice(false);
-    setShowScanUI(false);
-    setShowPinInput(false);
-    setEnteredPin('');
-    setFailedAttempts(0);
-    setScanMessage('Place finger on scanner…');
-    setScanError('');
+    resetScanState();
     handleReset();
   };
 
@@ -196,7 +209,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         throw new Error(error.message);
       }
 
-      const result = await waitForCommandResult(data.id, 30000);
+      const result = await waitForCommandResult(data.id, 45000, 1500);
 
       if (result.result === 'matched') {
         setScanError('');
@@ -207,14 +220,22 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setTimeout(() => {
           executeFinalAction();
         }, 800);
+        return;
+      }
 
+      if (result.result === 'show_backup_pin') {
+        setIsWaitingForDevice(false);
+        setIsUnlocking(false);
+        setScanError('Fingerprint failed 3 times.');
+        setScanMessage('Please enter your backup PIN.');
+        setShowScanUI(false);
+        setShowPinInput(true);
         return;
       }
 
       if (result.result === 'mismatch') {
         const newAttempts = failedAttempts + 1;
         setFailedAttempts(newAttempts);
-
         setIsWaitingForDevice(false);
         setIsUnlocking(false);
         setScanError(`Fingerprint mismatch. Scanned ID ${result.scanned_fingerprint_id ?? 'unknown'}.`);
@@ -224,14 +245,12 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
           setShowScanUI(false);
           setShowPinInput(true);
         }
-
         return;
       }
 
       if (result.result === 'timeout') {
         const newAttempts = failedAttempts + 1;
         setFailedAttempts(newAttempts);
-
         setIsWaitingForDevice(false);
         setIsUnlocking(false);
         setScanError('No fingerprint detected in time.');
@@ -241,7 +260,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
           setShowScanUI(false);
           setShowPinInput(true);
         }
-
         return;
       }
 
@@ -255,7 +273,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
       const message = err.message || 'Failed to communicate with device.';
 
-      if (message === 'Command timeout.') {
+      if (message.startsWith('Command timeout.')) {
         const newAttempts = failedAttempts + 1;
         setFailedAttempts(newAttempts);
         setScanError('No response from device in time.');
@@ -265,7 +283,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
           setShowScanUI(false);
           setShowPinInput(true);
         }
-
         return;
       }
 
