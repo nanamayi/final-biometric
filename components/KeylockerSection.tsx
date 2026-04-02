@@ -66,9 +66,9 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     while (Date.now() - started < timeoutMs) {
       const { data, error } = await supabase
         .from('device_commands')
-        .select('processed,result,scanned_fingerprint_id')
+        .select('id, processed, result, scanned_fingerprint_id')
         .eq('id', commandId)
-        .single();
+        .maybeSingle();
 
       if (error) {
         throw new Error(error.message);
@@ -78,7 +78,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         lastKnownResult = data.result;
       }
 
-      if (data?.processed) {
+      if (data?.processed === true) {
         return data;
       }
 
