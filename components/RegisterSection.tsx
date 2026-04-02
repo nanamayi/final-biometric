@@ -22,7 +22,6 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
   const [scanError, setScanError] = useState('');
   const [isWaitingForFingerprint, setIsWaitingForFingerprint] = useState(false);
 
-  // NEW: backup PIN
   const [backupPin, setBackupPin] = useState('');
   const [confirmBackupPin, setConfirmBackupPin] = useState('');
 
@@ -72,8 +71,13 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     }
   };
 
-  const waitForCommandResult = async (commandId: string, timeoutMs = 30000) => {
+  const waitForCommandResult = async (
+    commandId: string,
+    timeoutMs = 90000,
+    pollMs = 1500
+  ) => {
     const started = Date.now();
+    let lastKnownResult = 'pending';
 
     while (Date.now() - started < timeoutMs) {
       const { data, error } = await supabase
@@ -86,14 +90,18 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         throw new Error(error.message);
       }
 
+      if (data?.result) {
+        lastKnownResult = data.result;
+      }
+
       if (data?.processed) {
         return data;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
 
-    throw new Error('Command timeout.');
+    throw new Error(`Command timeout. Last result: ${lastKnownResult}`);
   };
 
   const prepareFingerprintEnroll = async () => {
@@ -116,7 +124,9 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     setAssignedFingerprintId('');
     setScanError('');
     setIsWaitingForFingerprint(true);
-    setScanMessage(`Waiting for ESP32 to enroll fingerprint ID ${nextFingerprintId}...`);
+    setScanMessage(
+      `Waiting for ESP32 to enroll fingerprint ID ${nextFingerprintId}. Place your finger on the sensor, remove it when asked, then place the same finger again.`
+    );
 
     try {
       const { data, error } = await supabase
@@ -135,7 +145,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         throw new Error(error.message);
       }
 
-      const result = await waitForCommandResult(data.id, 45000);
+      const result = await waitForCommandResult(data.id, 90000, 1500);
 
       if (result.result === 'enrolled') {
         const enrolledId = String(result.enrolled_fingerprint_id ?? nextFingerprintId);
@@ -143,22 +153,29 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setFingerprintReady(true);
         setScanError('');
         setScanMessage(`Fingerprint enrolled successfully. ID ${enrolledId}`);
-      } else if (result.result === 'enroll_failed') {
+        return;
+      }
+
+      if (result.result === 'enroll_failed') {
         setFingerprintReady(false);
         setAssignedFingerprintId('');
         setScanError('ESP32 failed to enroll fingerprint.');
-        setScanMessage('Fingerprint enroll failed. Try again.');
-      } else if (result.result === 'timeout') {
-        setFingerprintReady(false);
-        setAssignedFingerprintId('');
-        setScanError('Enroll timeout.');
-        setScanMessage('Enroll timeout. Please try again.');
-      } else {
-        setFingerprintReady(false);
-        setAssignedFingerprintId('');
-        setScanError(`Unexpected result: ${result.result}`);
-        setScanMessage(`Unexpected result: ${result.result}`);
+        setScanMessage('Fingerprint enrollment failed. Please try again.');
+        return;
       }
+
+      if (result.result === 'timeout') {
+        setFingerprintReady(false);
+        setAssignedFingerprintId('');
+        setScanError('ESP32 enrollment timed out.');
+        setScanMessage('Enrollment timed out on the ESP32. Please try again.');
+        return;
+      }
+
+      setFingerprintReady(false);
+      setAssignedFingerprintId('');
+      setScanError(`Unexpected result: ${result.result}`);
+      setScanMessage(`Unexpected result: ${result.result}`);
     } catch (err: any) {
       setFingerprintReady(false);
       setAssignedFingerprintId('');
