@@ -33,12 +33,15 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   const [isVerifyingPin, setIsVerifyingPin] = useState(false);
 
   const keys = Array.from({ length: 20 }, (_, i) => `Key-${100 + i + 1}`);
-  const activeBorrows = useMemo(() => history.filter(h => h.status === 'Borrowed'), [history]);
+
+  const activeBorrows = useMemo(() => {
+    return history.filter((h) => h.status === 'Borrowed' && !h.timeOut);
+  }, [history]);
 
   useEffect(() => {
     if (selectedUserId) {
-      const user = users.find(u => u.id === selectedUserId);
-      setSelectedUser(user ?? null);
+      const user = users.find((u) => u.id === selectedUserId) ?? null;
+      setSelectedUser(user);
     } else {
       setSelectedUser(null);
     }
@@ -46,8 +49,13 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
   const currentUserBorrow = useMemo(() => {
     if (!selectedUser) return null;
-    return activeBorrows.find(b => b.userId === selectedUser.id) ?? null;
+    return activeBorrows.find((b) => b.userId === selectedUser.id) ?? null;
   }, [selectedUser, activeBorrows]);
+
+  const borrowerForReturn = useMemo(() => {
+    if (!currentUserBorrow) return null;
+    return users.find((u) => u.id === currentUserBorrow.userId) ?? null;
+  }, [currentUserBorrow, users]);
 
   const isIdentified = useMemo(() => {
     if (!selectedUser) return false;
@@ -65,10 +73,10 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
     while (Date.now() - started < timeoutMs) {
       const { data, error } = await supabase
-  .from('device_commands')
-  .select('id, processed, result, scanned_fingerprint_id')
-  .eq('id', commandId)
-  .maybeSingle();
+        .from('device_commands')
+        .select('id, processed, result, scanned_fingerprint_id')
+        .eq('id', commandId)
+        .maybeSingle();
 
       if (error) {
         throw new Error(error.message);
@@ -88,13 +96,27 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     throw new Error(`Command timeout. Last result: ${lastKnownResult}`);
   };
 
-  const resetScanState = () => {
+  const clearVisualState = () => {
     setIsUnlocking(false);
     setIsWaitingForDevice(false);
     setShowScanUI(false);
     setShowPinInput(false);
     setEnteredPin('');
+    setScanMessage('Place finger on scanner…');
+    setScanError('');
+  };
+
+  const resetAllState = () => {
+    setSelectedUser(null);
+    setSelectedUserId('');
+    setSelectedYearSection('');
+    setSelectedKey('');
     setFailedAttempts(0);
+    setShowPinInput(false);
+    setEnteredPin('');
+    setShowScanUI(false);
+    setIsUnlocking(false);
+    setIsWaitingForDevice(false);
     setScanMessage('Place finger on scanner…');
     setScanError('');
   };
@@ -106,6 +128,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       onReturn(currentUserBorrow.id);
     } else {
       const now = new Date();
+
       const newHistoryItem: HistoryItem = {
         id: '',
         userId: selectedUser.id,
@@ -120,15 +143,17 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         timeOut: null,
         status: 'Borrowed'
       };
+
       onBorrow(newHistoryItem);
     }
 
-    resetScanState();
-    handleReset();
+    resetAllState();
   };
 
   const handlePinVerify = async () => {
-    if (!selectedUser) return;
+    const actingUser = currentUserBorrow ? borrowerForReturn : selectedUser;
+
+    if (!actingUser) return;
 
     if (!enteredPin.trim()) {
       alert('Please enter your backup PIN.');
@@ -140,7 +165,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     try {
       const { data, error } = await supabase.functions.invoke('verify-backup-pin', {
         body: {
-          userId: selectedUser.id,
+          userId: actingUser.id,
           backupPin: enteredPin
         }
       });
@@ -170,20 +195,49 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       return;
     }
 
-    if (!selectedUser) return;
+    if (!selectedUser) {
+      alert('Please select a registered user.');
+      return;
+    }
 
-    if (!currentUserBorrow) {
+    const isReturning = !!currentUserBorrow;
+    const actingUser = isReturning ? borrowerForReturn : selectedUser;
+
+    if (!actingUser) {
+      alert('Unable to resolve the user for this action.');
+      return;
+    }
+
+    if (!actingUser.fingerprintId || String(actingUser.fingerprintId).trim() === '') {
+      alert('This user has no fingerprint ID.');
+      return;
+    }
+
+    if (!isReturning) {
       if (!selectedYearSection) {
         alert('Please select your Year & Section.');
         return;
       }
+
       if (!selectedKey) {
         alert('Please select a key to borrow.');
         return;
       }
+
+      const alreadyBorrowing = activeBorrows.find((b) => b.userId === actingUser.id);
+      if (alreadyBorrowing) {
+        alert('This user still has an unreturned key.');
+        return;
+      }
     }
 
-    const keyForCommand = currentUserBorrow ? currentUserBorrow.keyNumber : selectedKey;
+    const keyForCommand = isReturning ? currentUserBorrow!.keyNumber : selectedKey;
+    const expectedFingerprintId = Number(String(actingUser.fingerprintId).trim());
+
+    if (!Number.isFinite(expectedFingerprintId) || expectedFingerprintId <= 0) {
+      alert('Invalid fingerprint ID for this user.');
+      return;
+    }
 
     setScanError('');
     setScanMessage('Waiting for ESP32 verification...');
@@ -192,12 +246,18 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     setShowScanUI(true);
 
     try {
+      console.log('INITIATE ACTION');
+      console.log('isReturning:', isReturning);
+      console.log('actingUser:', actingUser.fullName);
+      console.log('expectedFingerprintId:', expectedFingerprintId);
+      console.log('keyForCommand:', keyForCommand);
+
       const { data, error } = await supabase
         .from('device_commands')
         .insert({
           device_id: 'locker_1',
           action: 'verify_and_unlock',
-          expected_fingerprint_id: Number(selectedUser.fingerprintId),
+          expected_fingerprint_id: expectedFingerprintId,
           key_number: keyForCommand,
           processed: false,
           result: 'pending'
@@ -213,7 +273,8 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
       if (result.result === 'matched') {
         setScanError('');
-        setScanMessage(`Verified (ID ${result.scanned_fingerprint_id ?? selectedUser.fingerprintId})`);
+        setScanMessage(`Verified (ID ${result.scanned_fingerprint_id ?? expectedFingerprintId})`);
+        setIsWaitingForDevice(false);
         setIsUnlocking(true);
         setFailedAttempts(0);
 
@@ -230,36 +291,43 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setScanMessage('Please enter your backup PIN.');
         setShowScanUI(false);
         setShowPinInput(true);
-        return;
-      }
-
-      if (result.result === 'mismatch') {
-        const newAttempts = failedAttempts + 1;
-        setFailedAttempts(newAttempts);
-        setIsWaitingForDevice(false);
-        setIsUnlocking(false);
-        setScanError(`Fingerprint mismatch. Scanned ID ${result.scanned_fingerprint_id ?? 'unknown'}.`);
-        setScanMessage(`No match. Attempt ${newAttempts} of 3.`);
-
-        if (newAttempts >= 3) {
-          setShowScanUI(false);
-          setShowPinInput(true);
-        }
+        setFailedAttempts(3);
         return;
       }
 
       if (result.result === 'timeout') {
-        const newAttempts = failedAttempts + 1;
-        setFailedAttempts(newAttempts);
         setIsWaitingForDevice(false);
         setIsUnlocking(false);
-        setScanError('No fingerprint detected in time.');
-        setScanMessage(`Verification timeout. Attempt ${newAttempts} of 3.`);
+        setFailedAttempts((prev) => {
+          const next = prev + 1;
+          setScanError('No fingerprint detected in time.');
+          setScanMessage(`Verification timeout. Attempt ${next} of 3.`);
 
-        if (newAttempts >= 3) {
-          setShowScanUI(false);
-          setShowPinInput(true);
-        }
+          if (next >= 3) {
+            setShowScanUI(false);
+            setShowPinInput(true);
+          }
+
+          return next;
+        });
+        return;
+      }
+
+      if (result.result === 'mismatch') {
+        setIsWaitingForDevice(false);
+        setIsUnlocking(false);
+        setFailedAttempts((prev) => {
+          const next = prev + 1;
+          setScanError(`Fingerprint mismatch. Scanned ID ${result.scanned_fingerprint_id ?? 'unknown'}.`);
+          setScanMessage(`No match. Attempt ${next} of 3.`);
+
+          if (next >= 3) {
+            setShowScanUI(false);
+            setShowPinInput(true);
+          }
+
+          return next;
+        });
         return;
       }
 
@@ -274,15 +342,18 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       const message = err.message || 'Failed to communicate with device.';
 
       if (message.startsWith('Command timeout.')) {
-        const newAttempts = failedAttempts + 1;
-        setFailedAttempts(newAttempts);
-        setScanError('No response from device in time.');
-        setScanMessage(`Verification timeout. Attempt ${newAttempts} of 3.`);
+        setFailedAttempts((prev) => {
+          const next = prev + 1;
+          setScanError('No response from device in time.');
+          setScanMessage(`Verification timeout. Attempt ${next} of 3.`);
 
-        if (newAttempts >= 3) {
-          setShowScanUI(false);
-          setShowPinInput(true);
-        }
+          if (next >= 3) {
+            setShowScanUI(false);
+            setShowPinInput(true);
+          }
+
+          return next;
+        });
         return;
       }
 
@@ -292,13 +363,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   };
 
   const handleReset = () => {
-    setSelectedUser(null);
-    setSelectedUserId('');
-    setSelectedYearSection('');
-    setSelectedKey('');
-    setFailedAttempts(0);
-    setShowPinInput(false);
-    setEnteredPin('');
+    resetAllState();
   };
 
   return (
@@ -357,9 +422,11 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                 <div className="text-center text-[10px] font-black uppercase tracking-widest text-gray-400">
                   Waiting for ESP32 fingerprint verification…
                   <div className="mt-2 text-[11px] font-black text-gray-700 normal-case">
-                    Selected user fingerprint ID:{' '}
+                    Expected fingerprint ID:{' '}
                     <span className="font-black">
-                      {String(selectedUser?.fingerprintId ?? '—')}
+                      {currentUserBorrow
+                        ? String(borrowerForReturn?.fingerprintId ?? '—')
+                        : String(selectedUser?.fingerprintId ?? '—')}
                     </span>
                   </div>
                   <div className="mt-2 text-[11px] font-black text-amber-600 normal-case">
@@ -371,10 +438,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
               {!isUnlocking && (
                 <button
                   onClick={() => {
-                    setShowScanUI(false);
-                    setIsWaitingForDevice(false);
-                    setScanError('');
-                    setScanMessage('Place finger on scanner…');
+                    clearVisualState();
                   }}
                   className="py-2 text-gray-400 font-bold uppercase tracking-widest text-[10px]"
                 >
@@ -445,7 +509,9 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                 onChange={(e) => setSelectedUserId(e.target.value)}
                 className="w-full px-5 py-4.5 bg-gray-50 border-2 border-indigo-100 rounded-2xl font-black text-sm text-gray-900 focus:bg-white focus:border-indigo-500 transition-all outline-none"
               >
-                <option value="" className="text-gray-400 font-bold">Choose registered user</option>
+                <option value="" className="text-gray-400 font-bold">
+                  Choose registered user
+                </option>
                 {users.map((u) => (
                   <option key={u.id} value={u.id} className="text-gray-900 font-bold bg-white">
                     {u.fullName}
@@ -463,7 +529,9 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                 onChange={(e) => setSelectedYearSection(e.target.value as YearSection)}
                 className="w-full px-5 py-4.5 bg-gray-50 border-2 border-indigo-100 rounded-2xl font-black text-sm text-gray-900 focus:bg-white focus:border-indigo-500 transition-all outline-none"
               >
-                <option value="" className="text-gray-400 font-bold">Select current section</option>
+                <option value="" className="text-gray-400 font-bold">
+                  Select current section
+                </option>
                 <option value="1st Year - Day" className="text-gray-900 font-bold bg-white">1st Year - Day</option>
                 <option value="1st Year - Night" className="text-gray-900 font-bold bg-white">1st Year - Night</option>
                 <option value="2nd Year - Day" className="text-gray-900 font-bold bg-white">2nd Year - Day</option>
@@ -538,7 +606,9 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
             <button
               onClick={initiateAction}
               className={`w-full py-5 rounded-2xl font-black text-base shadow-xl transition-all flex items-center justify-center gap-3 uppercase tracking-widest ${
-                currentUserBorrow ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-indigo-600 text-white hover:bg-indigo-700'
+                currentUserBorrow
+                  ? 'bg-amber-500 text-white hover:bg-amber-600'
+                  : 'bg-indigo-600 text-white hover:bg-indigo-700'
               }`}
             >
               <Fingerprint size={22} />
