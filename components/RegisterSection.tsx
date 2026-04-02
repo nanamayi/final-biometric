@@ -81,10 +81,10 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
     while (Date.now() - started < timeoutMs) {
       const { data, error } = await supabase
-        .from('device_commands')
-        .select('id, processed, result, enrolled_fingerprint_id')
-        .eq('id', commandId)
-        .maybeSingle();
+  .from('device_commands')
+  .select('id, processed, result, enrolled_fingerprint_id')
+  .eq('id', commandId)
+  .maybeSingle();
 
       if (error) {
         throw new Error(error.message);
