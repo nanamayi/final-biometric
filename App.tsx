@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { User, HistoryItem, Tab } from './types';
 import RegisterSection from './components/RegisterSection';
 import KeylockerSection from './components/KeylockerSection';
@@ -23,7 +23,7 @@ const App: React.FC = () => {
   const [showSplash, setShowSplash] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
 
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     if (!SUPABASE_CONFIGURED) return;
 
     const { data, error } = await supabase
@@ -48,9 +48,9 @@ const App: React.FC = () => {
     }));
 
     setUsers(transformedUsers);
-  };
+  }, []);
 
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     if (!SUPABASE_CONFIGURED) return;
 
     const { data, error } = await supabase
@@ -87,29 +87,50 @@ const App: React.FC = () => {
     }));
 
     setHistory(transformedHistory);
-  };
+  }, []);
+
+  const refreshCoreData = useCallback(async () => {
+    await Promise.all([fetchUsers(), fetchHistory()]);
+  }, [fetchUsers, fetchHistory]);
+
+  const clearPendingDeviceCommands = useCallback(async () => {
+    if (!SUPABASE_CONFIGURED) return;
+
+    const { error } = await supabase.rpc('clear_pending_device_commands', {
+      p_device_id: 'locker_1'
+    });
+
+    if (error) {
+      console.warn('Failed to clear pending commands:', error.message);
+    }
+  }, []);
 
   useEffect(() => {
     const splashTimer = setTimeout(() => setShowSplash(false), 2500);
 
     if (SUPABASE_CONFIGURED) {
       setIsLoading(true);
-      Promise.all([fetchUsers(), fetchHistory()]).finally(() => setIsLoading(false));
+      refreshCoreData().finally(() => setIsLoading(false));
     }
 
     return () => clearTimeout(splashTimer);
-  }, []);
+  }, [refreshCoreData]);
 
   useEffect(() => {
     if (!SUPABASE_CONFIGURED) return;
 
-    if (activeTab === 'Registered') fetchUsers();
-    if (activeTab === 'History') fetchHistory();
-    if (activeTab === 'Keylocker') {
+    if (activeTab === 'Registered') {
       fetchUsers();
+    }
+
+    if (activeTab === 'History') {
       fetchHistory();
     }
-  }, [activeTab]);
+
+    if (activeTab === 'Keylocker') {
+      refreshCoreData();
+    }
+  }, [activeTab, fetchUsers, fetchHistory, refreshCoreData]);
 
   useEffect(() => {
     if (!SUPABASE_CONFIGURED) return;
@@ -140,7 +161,7 @@ const App: React.FC = () => {
       supabase.removeChannel(usersChannel);
       supabase.removeChannel(logsChannel);
     };
-  }, []);
+  }, [fetchUsers, fetchHistory]);
 
   const handleRegister = async (newUser: User & { backupPin?: string }) => {
     if (!SUPABASE_CONFIGURED) {
@@ -155,6 +176,12 @@ const App: React.FC = () => {
         throw new Error('Backup PIN is required.');
       }
 
+      const fingerprintId = Number(String(newUser.fingerprintId).trim());
+
+      if (!Number.isFinite(fingerprintId) || fingerprintId <= 0) {
+        throw new Error('Invalid fingerprint ID.');
+      }
+
       const pinHash = await hashPin(newUser.backupPin);
 
       const { error } = await supabase
@@ -164,7 +191,7 @@ const App: React.FC = () => {
           program: newUser.program,
           position: newUser.position,
           photo_url: newUser.photoUrl,
-          fingerprint_id: Number(newUser.fingerprintId),
+          fingerprint_id: fingerprintId,
           pin_hash: pinHash
         });
 
@@ -186,6 +213,8 @@ const App: React.FC = () => {
     setIsLoading(true);
 
     try {
+      await clearPendingDeviceCommands();
+
       const { data: activeBorrow, error: activeBorrowError } = await supabase
         .from('key_logs')
         .select('id, key_number')
@@ -202,7 +231,7 @@ const App: React.FC = () => {
 
       const { data: activeKey, error: activeKeyError } = await supabase
         .from('key_logs')
-        .select('id')
+        .select('id, key_number')
         .eq('key_number', item.keyNumber)
         .eq('status', 'Borrowed')
         .is('time_out', null)
@@ -211,7 +240,7 @@ const App: React.FC = () => {
       if (activeKeyError) throw activeKeyError;
 
       if (activeKey) {
-        throw new Error('This key is already borrowed.');
+        throw new Error(`This key is already borrowed: ${activeKey.key_number}`);
       }
 
       const { error } = await supabase.from('key_logs').insert({
@@ -219,7 +248,8 @@ const App: React.FC = () => {
         year_section: item.yearSection,
         key_number: item.keyNumber,
         status: 'Borrowed',
-        time_in: new Date().toISOString()
+        time_in: new Date().toISOString(),
+        time_out: null
       });
 
       if (error) throw error;
@@ -238,13 +268,31 @@ const App: React.FC = () => {
     setIsLoading(true);
 
     try {
+      await clearPendingDeviceCommands();
+
+      const { data: activeLog, error: activeLogError } = await supabase
+        .from('key_logs')
+        .select('id, status, time_out')
+        .eq('id', logId)
+        .eq('status', 'Borrowed')
+        .is('time_out', null)
+        .maybeSingle();
+
+      if (activeLogError) throw activeLogError;
+
+      if (!activeLog) {
+        throw new Error('No active borrowed record found for return.');
+      }
+
       const { error: updateError } = await supabase
         .from('key_logs')
         .update({
           status: 'Returned',
           time_out: new Date().toISOString()
         })
-        .eq('id', logId);
+        .eq('id', logId)
+        .eq('status', 'Borrowed')
+        .is('time_out', null);
 
       if (updateError) throw updateError;
 
