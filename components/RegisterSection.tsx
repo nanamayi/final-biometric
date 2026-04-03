@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { Program, Position, YearSection, User } from '../types';
 import { Camera, Fingerprint, UserPlus, Trash2, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { supabase, SUPABASE_CONFIGURED } from '../supabase';
@@ -37,6 +37,22 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     return Math.max(...numericIds) + 1;
   }, [users]);
 
+  const stopCamera = () => {
+    const stream = videoRef.current?.srcObject as MediaStream | null;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
   const startCamera = async () => {
     setIsCapturing(true);
     try {
@@ -60,12 +76,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         context.drawImage(videoRef.current, 0, 0);
         const dataUrl = canvasRef.current.toDataURL('image/jpeg');
         setPhoto(dataUrl);
-
-        const stream = videoRef.current.srcObject as MediaStream | null;
-        if (stream) {
-          stream.getTracks().forEach((track) => track.stop());
-        }
-
+        stopCamera();
         setIsCapturing(false);
       }
     }
@@ -81,10 +92,10 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
     while (Date.now() - started < timeoutMs) {
       const { data, error } = await supabase
-  .from('device_commands')
-  .select('id, processed, result, enrolled_fingerprint_id')
-  .eq('id', commandId)
-  .maybeSingle();
+        .from('device_commands')
+        .select('id, processed, result, enrolled_fingerprint_id')
+        .eq('id', commandId)
+        .maybeSingle();
 
       if (error) {
         throw new Error(error.message);
@@ -102,6 +113,16 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     }
 
     throw new Error(`Command timeout. Last result: ${lastKnownResult}`);
+  };
+
+  const clearPendingDeviceCommands = async () => {
+    const { error } = await supabase.rpc('clear_pending_device_commands', {
+      p_device_id: 'locker_1'
+    });
+
+    if (error) {
+      console.warn('Failed to clear pending commands:', error.message);
+    }
   };
 
   const prepareFingerprintEnroll = async () => {
@@ -129,6 +150,8 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     );
 
     try {
+      await clearPendingDeviceCommands();
+
       const { data, error } = await supabase
         .from('device_commands')
         .insert({
@@ -169,6 +192,14 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setAssignedFingerprintId('');
         setScanError('ESP32 enrollment timed out.');
         setScanMessage('Enrollment timed out on the ESP32. Please try again.');
+        return;
+      }
+
+      if (result.result === 'sensor_not_ready') {
+        setFingerprintReady(false);
+        setAssignedFingerprintId('');
+        setScanError('Fingerprint sensor is not ready.');
+        setScanMessage('Fingerprint sensor is not ready.');
         return;
       }
 
@@ -258,6 +289,8 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     setScanMessage('Click to enroll fingerprint.');
     setBackupPin('');
     setConfirmBackupPin('');
+    stopCamera();
+    setIsCapturing(false);
   };
 
   return (
@@ -308,7 +341,11 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
             {photo && (
               <button
-                onClick={() => setPhoto(null)}
+                onClick={() => {
+                  setPhoto(null);
+                  setFingerprintReady(false);
+                  setAssignedFingerprintId('');
+                }}
                 className="text-sm font-bold uppercase tracking-widest text-red-700 bg-red-50 px-5 py-2.5 rounded-full hover:bg-red-100 transition-colors flex items-center gap-1 border border-red-100"
               >
                 <Trash2 size={14} /> Retake

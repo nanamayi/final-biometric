@@ -150,6 +150,26 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     resetAllState();
   };
 
+  const sendBackupPinUnlockCommand = async (keyNumber: string) => {
+    const { data, error } = await supabase
+      .from('device_commands')
+      .insert({
+        device_id: 'locker_1',
+        action: 'unlock_with_backup_pin',
+        key_number: keyNumber,
+        processed: false,
+        result: 'pending'
+      })
+      .select('id')
+      .single();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return await waitForCommandResult(data.id, 45000, 1500);
+  };
+
   const handlePinVerify = async () => {
     const actingUser = currentUserBorrow ? borrowerForReturn : selectedUser;
 
@@ -174,15 +194,45 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         throw new Error(error.message);
       }
 
-      if (data?.valid) {
-        setShowPinInput(false);
-        setEnteredPin('');
-        setFailedAttempts(0);
-        executeFinalAction();
-      } else {
+      if (!data?.valid) {
         alert('Wrong PIN.');
+        return;
       }
+
+      const keyForCommand = currentUserBorrow ? currentUserBorrow.keyNumber : selectedKey;
+
+      if (!keyForCommand) {
+        throw new Error('No key selected.');
+      }
+
+      setShowPinInput(false);
+      setScanError('');
+      setScanMessage('Backup PIN verified. Unlocking cabinet...');
+      setShowScanUI(true);
+      setIsWaitingForDevice(true);
+      setIsUnlocking(false);
+
+      const result = await sendBackupPinUnlockCommand(keyForCommand);
+
+      if (result.result !== 'backup_pin_unlocked') {
+        throw new Error(`Backup PIN unlock failed: ${result.result}`);
+      }
+
+      setEnteredPin('');
+      setFailedAttempts(0);
+      setIsWaitingForDevice(false);
+      setIsUnlocking(true);
+      setScanMessage('Backup PIN verified');
+      setScanError('');
+
+      setTimeout(() => {
+        executeFinalAction();
+      }, 800);
     } catch (err: any) {
+      setIsWaitingForDevice(false);
+      setIsUnlocking(false);
+      setShowScanUI(false);
+      setShowPinInput(true);
       alert(err.message || 'Failed to verify PIN.');
     } finally {
       setIsVerifyingPin(false);
@@ -246,12 +296,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     setShowScanUI(true);
 
     try {
-      console.log('INITIATE ACTION');
-      console.log('isReturning:', isReturning);
-      console.log('actingUser:', actingUser.fullName);
-      console.log('expectedFingerprintId:', expectedFingerprintId);
-      console.log('keyForCommand:', keyForCommand);
-
       const { data, error } = await supabase
         .from('device_commands')
         .insert({
@@ -328,6 +372,22 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
           return next;
         });
+        return;
+      }
+
+      if (result.result === 'sensor_not_ready') {
+        setIsWaitingForDevice(false);
+        setIsUnlocking(false);
+        setScanError('Fingerprint sensor is not ready.');
+        setScanMessage('Device sensor is not ready.');
+        return;
+      }
+
+      if (result.result === 'unlock_failed') {
+        setIsWaitingForDevice(false);
+        setIsUnlocking(false);
+        setScanError('Locker unlock failed.');
+        setScanMessage('Locker unlock failed.');
         return;
       }
 

@@ -93,18 +93,6 @@ const App: React.FC = () => {
     await Promise.all([fetchUsers(), fetchHistory()]);
   }, [fetchUsers, fetchHistory]);
 
-  const clearPendingDeviceCommands = useCallback(async () => {
-    if (!SUPABASE_CONFIGURED) return;
-
-    const { error } = await supabase.rpc('clear_pending_device_commands', {
-      p_device_id: 'locker_1'
-    });
-
-    if (error) {
-      console.warn('Failed to clear pending commands:', error.message);
-    }
-  }, []);
-
   useEffect(() => {
     const splashTimer = setTimeout(() => setShowSplash(false), 2500);
 
@@ -213,8 +201,6 @@ const App: React.FC = () => {
     setIsLoading(true);
 
     try {
-      await clearPendingDeviceCommands();
-
       const { data: activeBorrow, error: activeBorrowError } = await supabase
         .from('key_logs')
         .select('id, key_number')
@@ -268,8 +254,6 @@ const App: React.FC = () => {
     setIsLoading(true);
 
     try {
-      await clearPendingDeviceCommands();
-
       const { data: activeLog, error: activeLogError } = await supabase
         .from('key_logs')
         .select('id, status, time_out')
@@ -355,12 +339,7 @@ const App: React.FC = () => {
 
     switch (activeTab) {
       case 'Register':
-        return (
-          <RegisterSection
-            onRegister={handleRegister}
-            users={users}
-          />
-        );
+        return <RegisterSection onRegister={handleRegister} users={users} />;
 
       case 'Keylocker':
         return (
@@ -379,12 +358,7 @@ const App: React.FC = () => {
         return <HistorySection history={history} />;
 
       default:
-        return (
-          <RegisterSection
-            onRegister={handleRegister}
-            users={users}
-          />
-        );
+        return <RegisterSection onRegister={handleRegister} users={users} />;
     }
   };
 
