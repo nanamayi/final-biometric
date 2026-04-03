@@ -65,7 +65,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
   const waitForCommandResult = async (
     commandId: string,
-    timeoutMs = 45000,
+    timeoutMs = 60000,
     pollMs = 1500
   ) => {
     const started = Date.now();
@@ -94,6 +94,16 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     }
 
     throw new Error(`Command timeout. Last result: ${lastKnownResult}`);
+  };
+
+  const clearPendingDeviceCommands = async () => {
+    const { error } = await supabase.rpc('clear_pending_device_commands', {
+      p_device_id: 'locker_1'
+    });
+
+    if (error) {
+      console.warn('Failed to clear pending commands:', error.message);
+    }
   };
 
   const clearVisualState = () => {
@@ -151,6 +161,8 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   };
 
   const sendBackupPinUnlockCommand = async (keyNumber: string) => {
+    await clearPendingDeviceCommands();
+
     const { data, error } = await supabase
       .from('device_commands')
       .insert({
@@ -167,7 +179,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       throw new Error(error.message);
     }
 
-    return await waitForCommandResult(data.id, 45000, 1500);
+    return await waitForCommandResult(data.id, 60000, 1500);
   };
 
   const handlePinVerify = async () => {
@@ -302,6 +314,8 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     setShowScanUI(true);
 
     try {
+      await clearPendingDeviceCommands();
+
       const { data, error } = await supabase
         .from('device_commands')
         .insert({
@@ -319,7 +333,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         throw new Error(error.message);
       }
 
-      const result = await waitForCommandResult(data.id, 45000, 1500);
+      const result = await waitForCommandResult(data.id, 60000, 1500);
 
       if (result.result === 'matched') {
         setScanError('');
