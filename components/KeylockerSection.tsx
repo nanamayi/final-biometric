@@ -32,7 +32,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   const [enteredPin, setEnteredPin] = useState('');
   const [isVerifyingPin, setIsVerifyingPin] = useState(false);
 
-  const keys = Array.from({ length: 20 }, (_, i) => `${100 + i + 1}`);
+  const keys = Array.from({ length: 20 }, (_, i) => `${101 + i}`);
 
   const activeBorrows = useMemo(() => {
     return history.filter((h) => h.status === 'Borrowed' && !h.timeOut);
