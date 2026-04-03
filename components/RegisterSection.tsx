@@ -34,7 +34,12 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       .filter((id) => Number.isFinite(id) && id > 0);
 
     if (numericIds.length === 0) return 1;
-    return Math.max(...numericIds) + 1;
+
+    let nextId = 1;
+    while (numericIds.includes(nextId)) {
+      nextId++;
+    }
+    return nextId;
   }, [users]);
 
   const stopCamera = () => {
@@ -93,7 +98,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     while (Date.now() - started < timeoutMs) {
       const { data, error } = await supabase
         .from('device_commands')
-        .select('id, processed, result, enrolled_fingerprint_id')
+        .select('id, processed, result, expected_fingerprint_id, scanned_fingerprint_id')
         .eq('id', commandId)
         .maybeSingle();
 
@@ -157,9 +162,11 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         .insert({
           device_id: 'locker_1',
           action: 'enroll_fingerprint',
-          enroll_fingerprint_id: nextFingerprintId,
+          expected_fingerprint_id: nextFingerprintId,
           processed: false,
-          result: 'pending'
+          result: 'pending',
+          key_number: null,
+          scanned_fingerprint_id: null
         })
         .select('id')
         .single();
@@ -171,7 +178,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       const result = await waitForCommandResult(data.id, 90000, 1500);
 
       if (result.result === 'enrolled') {
-        const enrolledId = String(result.enrolled_fingerprint_id ?? nextFingerprintId);
+        const enrolledId = String(result.expected_fingerprint_id ?? nextFingerprintId);
         setAssignedFingerprintId(enrolledId);
         setFingerprintReady(true);
         setScanError('');
@@ -200,6 +207,14 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setAssignedFingerprintId('');
         setScanError('Fingerprint sensor is not ready.');
         setScanMessage('Fingerprint sensor is not ready.');
+        return;
+      }
+
+      if (result.result === 'invalid_fingerprint_id') {
+        setFingerprintReady(false);
+        setAssignedFingerprintId('');
+        setScanError('Invalid fingerprint ID sent to ESP32.');
+        setScanMessage('Invalid fingerprint ID sent to ESP32.');
         return;
       }
 
@@ -447,6 +462,8 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
                 ? 'border-green-300 bg-green-50 text-green-800'
                 : isWaitingForFingerprint
                 ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                : scanError
+                ? 'border-red-300 bg-red-50 text-red-800 hover:bg-red-100'
                 : 'border-indigo-200 bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
             } ${isWaitingForFingerprint ? 'opacity-80 cursor-not-allowed' : ''}`}
           >
@@ -469,7 +486,9 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
             </span>
           </button>
 
-          <p className="text-xs text-center text-gray-500 font-semibold">{scanMessage}</p>
+          <p className={`text-xs text-center font-semibold ${scanError ? 'text-red-600' : 'text-gray-500'}`}>
+            {scanMessage}
+          </p>
         </div>
 
         <button
