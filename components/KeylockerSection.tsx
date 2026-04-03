@@ -289,7 +289,14 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       return;
     }
 
-    const actionName = isReturning ? 'verify_return' : 'verify_and_unlock';
+    let actionName = 'verify_and_unlock';
+
+    if (currentUserBorrow && currentUserBorrow.id) {
+      actionName = 'verify_return';
+    }
+
+    console.log('ACTION:', actionName);
+    console.log('CURRENT USER BORROW:', currentUserBorrow);
 
     setScanError('');
     setScanMessage(
