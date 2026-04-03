@@ -96,16 +96,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     throw new Error(`Command timeout. Last result: ${lastKnownResult}`);
   };
 
-  const clearPendingDeviceCommands = async () => {
-    const { error } = await supabase.rpc('clear_pending_device_commands', {
-      p_device_id: 'locker_1'
-    });
-
-    if (error) {
-      console.warn('Failed to clear pending commands:', error.message);
-    }
-  };
-
   const clearVisualState = () => {
     setIsUnlocking(false);
     setIsWaitingForDevice(false);
@@ -161,8 +151,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   };
 
   const sendBackupPinUnlockCommand = async (keyNumber: string) => {
-    await clearPendingDeviceCommands();
-
     const { data, error } = await supabase
       .from('device_commands')
       .insert({
@@ -314,8 +302,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     setShowScanUI(true);
 
     try {
-      await clearPendingDeviceCommands();
-
       const { data, error } = await supabase
         .from('device_commands')
         .insert({
@@ -689,7 +675,8 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
             <button
               onClick={initiateAction}
-              className={`w-full py-5 rounded-2xl font-black text-base shadow-xl transition-all flex items-center justify-center gap-3 uppercase tracking-widest ${
+              disabled={isWaitingForDevice || showScanUI || isVerifyingPin}
+              className={`w-full py-5 rounded-2xl font-black text-base shadow-xl transition-all flex items-center justify-center gap-3 uppercase tracking-widest disabled:opacity-60 disabled:cursor-not-allowed ${
                 currentUserBorrow
                   ? 'bg-amber-500 text-white hover:bg-amber-600'
                   : 'bg-indigo-600 text-white hover:bg-indigo-700'
