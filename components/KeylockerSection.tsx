@@ -32,7 +32,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   const [enteredPin, setEnteredPin] = useState('');
   const [isVerifyingPin, setIsVerifyingPin] = useState(false);
 
-  const keys = Array.from({ length: 20 }, (_, i) => `Key-${100 + i + 1}`);
+  const keys = Array.from({ length: 20 }, (_, i) => `${100 + i + 1}`);
 
   const activeBorrows = useMemo(() => {
     return history.filter((h) => h.status === 'Borrowed' && !h.timeOut);
@@ -641,7 +641,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                   Active Possession
                 </p>
                 <p className="text-5xl font-black text-amber-600">
-                  {currentUserBorrow.keyNumber.replace('Key-', '#')}
+                  #{currentUserBorrow.keyNumber}
                 </p>
               </div>
             ) : (
@@ -665,7 +665,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                             : 'bg-white border-gray-100 text-gray-700 hover:border-indigo-200'
                         }`}
                       >
-                        {keyNum.replace('Key-', '#')}
+                        #{keyNum}
                       </button>
                     );
                   })}
