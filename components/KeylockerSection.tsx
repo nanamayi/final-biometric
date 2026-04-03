@@ -289,8 +289,14 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       return;
     }
 
+    const actionName = isReturning ? 'verify_return' : 'verify_and_unlock';
+
     setScanError('');
-    setScanMessage('Waiting for ESP32 verification...');
+    setScanMessage(
+      isReturning
+        ? 'Waiting for ESP32 return verification...'
+        : 'Waiting for ESP32 verification...'
+    );
     setIsUnlocking(false);
     setIsWaitingForDevice(true);
     setShowScanUI(true);
@@ -300,7 +306,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         .from('device_commands')
         .insert({
           device_id: 'locker_1',
-          action: 'verify_and_unlock',
+          action: actionName,
           expected_fingerprint_id: expectedFingerprintId,
           key_number: keyForCommand,
           processed: false,
@@ -317,9 +323,13 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
       if (result.result === 'matched') {
         setScanError('');
-        setScanMessage(`Verified (ID ${result.scanned_fingerprint_id ?? expectedFingerprintId})`);
+        setScanMessage(
+          isReturning
+            ? `Return verified (ID ${result.scanned_fingerprint_id ?? expectedFingerprintId})`
+            : `Verified (ID ${result.scanned_fingerprint_id ?? expectedFingerprintId})`
+        );
         setIsWaitingForDevice(false);
-        setIsUnlocking(true);
+        setIsUnlocking(!isReturning);
         setFailedAttempts(0);
 
         setTimeout(() => {
