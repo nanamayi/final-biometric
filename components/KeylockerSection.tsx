@@ -297,7 +297,13 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
     console.log('ACTION:', actionName);
     console.log('CURRENT USER BORROW:', currentUserBorrow);
+    console.log('SELECTED USER:', selectedUser);
+    console.log('SELECTED KEY:', selectedKey);
+    console.log('SELECTED YEAR SECTION:', selectedYearSection);
 
+    setFailedAttempts(0);
+    setShowPinInput(false);
+    setEnteredPin('');
     setScanError('');
     setScanMessage(
       isReturning
@@ -336,7 +342,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
             : `Verified (ID ${result.scanned_fingerprint_id ?? expectedFingerprintId})`
         );
         setIsWaitingForDevice(false);
-        setIsUnlocking(!isReturning);
+        setIsUnlocking(true);
         setFailedAttempts(0);
 
         setTimeout(() => {
