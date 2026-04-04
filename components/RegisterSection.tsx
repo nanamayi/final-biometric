@@ -58,6 +58,14 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     };
   }, []);
 
+  const resetFingerprintState = () => {
+    setFingerprintReady(false);
+    setAssignedFingerprintId('');
+    setScanError('');
+    setScanMessage('Click to enroll fingerprint.');
+    setIsWaitingForFingerprint(false);
+  };
+
   const startCamera = async () => {
     setIsCapturing(true);
     try {
@@ -83,6 +91,9 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setPhoto(dataUrl);
         stopCamera();
         setIsCapturing(false);
+
+        // new photo = require fresh enroll
+        resetFingerprintState();
       }
     }
   };
@@ -133,6 +144,26 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
   const prepareFingerprintEnroll = async () => {
     if (!SUPABASE_CONFIGURED) {
       alert('Supabase is not configured.');
+      return;
+    }
+
+    if (!fullName.trim()) {
+      alert('Please enter your Full Name first.');
+      return;
+    }
+
+    if (!program) {
+      alert('Please select a Course first.');
+      return;
+    }
+
+    if (!position) {
+      alert('Please select a Position first.');
+      return;
+    }
+
+    if (!photo) {
+      alert('Please take a photo first.');
       return;
     }
 
@@ -279,7 +310,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
     const newUser: User = {
       id: Math.random().toString(36).substring(2, 11),
-      fullName,
+      fullName: fullName.trim(),
       program: program as Program,
       position: position as Position,
       yearSection: '' as YearSection,
@@ -297,11 +328,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     setProgram('');
     setPosition('');
     setPhoto(null);
-    setFingerprintReady(false);
-    setAssignedFingerprintId('');
-    setIsWaitingForFingerprint(false);
-    setScanError('');
-    setScanMessage('Click to enroll fingerprint.');
+    resetFingerprintState();
     setBackupPin('');
     setConfirmBackupPin('');
     stopCamera();
@@ -358,8 +385,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
               <button
                 onClick={() => {
                   setPhoto(null);
-                  setFingerprintReady(false);
-                  setAssignedFingerprintId('');
+                  resetFingerprintState();
                 }}
                 className="text-sm font-bold uppercase tracking-widest text-red-700 bg-red-50 px-5 py-2.5 rounded-full hover:bg-red-100 transition-colors flex items-center gap-1 border border-red-100"
               >
@@ -380,7 +406,10 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
               type="text"
               placeholder="Enter your full name"
               value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
+              onChange={(e) => {
+                setFullName(e.target.value);
+                if (fingerprintReady) resetFingerprintState();
+              }}
               className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black placeholder-gray-400"
             />
           </div>
@@ -391,7 +420,10 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
             </label>
             <select
               value={program}
-              onChange={(e) => setProgram(e.target.value as Program)}
+              onChange={(e) => {
+                setProgram(e.target.value as Program);
+                if (fingerprintReady) resetFingerprintState();
+              }}
               className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black appearance-none"
             >
               <option value="" className="text-gray-400">Select your course</option>
@@ -410,7 +442,10 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
             </label>
             <select
               value={position}
-              onChange={(e) => setPosition(e.target.value as Position)}
+              onChange={(e) => {
+                setPosition(e.target.value as Position);
+                if (fingerprintReady) resetFingerprintState();
+              }}
               className="w-full px-4 py-3.5 bg-gray-50 border-2 border-indigo-50 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all text-sm text-gray-900 font-black appearance-none"
             >
               <option value="" className="text-gray-400">Select position</option>
@@ -493,7 +528,8 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
         <button
           onClick={handleRegister}
-          className="w-full py-4 bg-gradient-to-r from-indigo-700 to-purple-700 text-white font-black rounded-2xl shadow-lg hover:shadow-indigo-200/50 hover:opacity-95 transition-all active:scale-[0.98] mt-4 uppercase tracking-wider text-sm"
+          disabled={isWaitingForFingerprint}
+          className="w-full py-4 bg-gradient-to-r from-indigo-700 to-purple-700 text-white font-black rounded-2xl shadow-lg hover:shadow-indigo-200/50 hover:opacity-95 transition-all active:scale-[0.98] mt-4 uppercase tracking-wider text-sm disabled:opacity-70 disabled:cursor-not-allowed"
         >
           Complete Registration
         </button>
