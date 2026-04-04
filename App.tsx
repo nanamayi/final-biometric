@@ -8,14 +8,6 @@ import BottomNav from './components/BottomNav';
 import { Key, Loader2, AlertTriangle, ExternalLink } from 'lucide-react';
 import { supabase, SUPABASE_CONFIGURED } from './supabase';
 
-async function hashPin(pin: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(pin);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-}
-
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<Tab>('Register');
   const [users, setUsers] = useState<User[]>([]);
@@ -170,20 +162,37 @@ const App: React.FC = () => {
         throw new Error('Invalid fingerprint ID.');
       }
 
-      const pinHash = await hashPin(newUser.backupPin);
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/dynamic-worker`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          },
+          body: JSON.stringify({
+            fullName: newUser.fullName,
+            program: newUser.program,
+            position: newUser.position,
+            photoUrl: newUser.photoUrl,
+            fingerprintId,
+            backupPin: newUser.backupPin,
+          }),
+        }
+      );
 
-      const { error } = await supabase
-        .from('registered_users')
-        .insert({
-          full_name: newUser.fullName,
-          program: newUser.program,
-          position: newUser.position,
-          photo_url: newUser.photoUrl,
-          fingerprint_id: fingerprintId,
-          pin_hash: pinHash
-        });
+      const data = await response.json();
 
-      if (error) throw error;
+      if (!response.ok) {
+        throw new Error(
+          typeof data?.error === 'string'
+            ? data.error
+            : data?.error?.message ||
+              data?.details ||
+              'Failed to register user.'
+        );
+      }
 
       await fetchUsers();
       setActiveTab('Keylocker');
