@@ -66,7 +66,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   const waitForCommandResult = async (
     commandId: string,
     timeoutMs = 60000,
-    pollMs = 1500
+    pollMs = 300
   ) => {
     const started = Date.now();
     let lastKnownResult = 'pending';
@@ -167,7 +167,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       throw new Error(error.message);
     }
 
-    return await waitForCommandResult(data.id, 60000, 1500);
+    return await waitForCommandResult(data.id, 60000, 300);
   };
 
   const handlePinVerify = async () => {
@@ -186,7 +186,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       const { data, error } = await supabase.functions.invoke('verify-backup-pin', {
         body: {
           userId: actingUser.id,
-          backupPin: enteredPin
+          pin: enteredPin
         }
       });
 
@@ -194,7 +194,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         throw new Error(error.message);
       }
 
-      if (!data?.valid) {
+      if (!data?.success) {
         alert('Wrong PIN.');
         return;
       }
@@ -227,7 +227,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
       setTimeout(() => {
         executeFinalAction();
-      }, 800);
+      }, 300);
     } catch (err: any) {
       setIsWaitingForDevice(false);
       setIsUnlocking(false);
@@ -332,7 +332,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         throw new Error(error.message);
       }
 
-      const result = await waitForCommandResult(data.id, 60000, 1500);
+      const result = await waitForCommandResult(data.id, 60000, 300);
 
       if (result.result === 'matched') {
         setScanError('');
@@ -347,7 +347,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
         setTimeout(() => {
           executeFinalAction();
-        }, 800);
+        }, 300);
         return;
       }
 
