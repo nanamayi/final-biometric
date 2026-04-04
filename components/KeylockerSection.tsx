@@ -96,6 +96,16 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     throw new Error(`Command timeout. Last result: ${lastKnownResult}`);
   };
 
+  const clearPendingDeviceCommands = async () => {
+    const { error } = await supabase.rpc('clear_pending_device_commands', {
+      p_device_id: 'locker_1'
+    });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+  };
+
   const clearVisualState = () => {
     setIsUnlocking(false);
     setIsWaitingForDevice(false);
@@ -151,6 +161,8 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   };
 
   const sendBackupPinUnlockCommand = async (keyNumber: string) => {
+    await clearPendingDeviceCommands();
+
     const { data, error } = await supabase
       .from('device_commands')
       .insert({
@@ -315,6 +327,8 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     setShowScanUI(true);
 
     try {
+      await clearPendingDeviceCommands();
+
       const { data, error } = await supabase
         .from('device_commands')
         .insert({
