@@ -49,6 +49,9 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   const toastTimeoutRef = useRef<number | null>(null);
   const lastToastMessageRef = useRef('');
 
+  const [showStatusBox, setShowStatusBox] = useState(false);
+  const statusBoxTimeoutRef = useRef<number | null>(null);
+
   const keys = Array.from({ length: 20 }, (_, i) => `${101 + i}`);
 
   const activeBorrows = useMemo(() => {
@@ -74,10 +77,26 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     }, 2200);
   };
 
+  const flashStatusBox = () => {
+    setShowStatusBox(true);
+
+    if (statusBoxTimeoutRef.current) {
+      window.clearTimeout(statusBoxTimeoutRef.current);
+    }
+
+    statusBoxTimeoutRef.current = window.setTimeout(() => {
+      setShowStatusBox(false);
+    }, 5000);
+  };
+
   useEffect(() => {
     return () => {
       if (toastTimeoutRef.current) {
         window.clearTimeout(toastTimeoutRef.current);
+      }
+
+      if (statusBoxTimeoutRef.current) {
+        window.clearTimeout(statusBoxTimeoutRef.current);
       }
     };
   }, []);
@@ -142,13 +161,28 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   }, [deviceStatus?.wifi_connected, deviceStatus?.sensor_found]);
 
   useEffect(() => {
+    if (!deviceStatus) return;
+
+    flashStatusBox();
+  }, [
+    deviceStatus?.wifi_connected,
+    deviceStatus?.sensor_found,
+    deviceStatus?.current_mode,
+    deviceStatus?.status_message,
+    deviceStatus?.fingerprint_step
+  ]);
+
+  useEffect(() => {
     if (!deviceStatus?.status_message) return;
+
+    const allowedModes = ['idle', 'verify', 'unlock', 'recovery', 'test'];
+    if (!allowedModes.includes(deviceStatus.current_mode)) return;
 
     const message = deviceStatus.status_message.trim();
     if (!message) return;
 
     showDeviceToast(message);
-  }, [deviceStatus?.status_message]);
+  }, [deviceStatus?.status_message, deviceStatus?.current_mode]);
 
   useEffect(() => {
     if (!showScanUI || !deviceStatus) return;
@@ -489,12 +523,12 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setScanMessage(
         deviceStatus?.sensor_found === false
           ? 'Fingerprint sensor is not ready.'
-          : 'Place your fingerprint and remove.'
+          : 'Place your finger and remove.'
       );
       setIsUnlocking(false);
       setIsWaitingForDevice(true);
       setShowScanUI(true);
-      showDeviceToast('Place your fingerprint and remove.');
+      showDeviceToast('Place your finger and remove.');
 
       const result = await waitForCommandResult(data.id, 60000, 300);
 
@@ -598,44 +632,46 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       )}
 
       <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 space-y-8 relative overflow-hidden border border-gray-100">
-        <div className="rounded-2xl border-2 border-indigo-50 bg-gray-50 px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">
-              Device Status
-            </span>
-            <span
-              className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${
-                deviceStatus?.sensor_found
-                  ? 'bg-green-100 text-green-700'
-                  : 'bg-red-100 text-red-700'
-              }`}
-            >
-              {deviceStatus?.sensor_found ? 'Sensor Found' : 'Sensor Not Ready'}
-            </span>
-          </div>
-
-          <div className="mt-2 text-xs font-semibold text-gray-600">
-            {deviceStatus?.status_message || 'Waiting for device status...'}
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-2">
-            <span
-              className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${
-                deviceStatus?.wifi_connected
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'bg-gray-200 text-gray-600'
-              }`}
-            >
-              {deviceStatus?.wifi_connected ? 'WiFi Connected' : 'WiFi Disconnected'}
-            </span>
-
-            {deviceStatus?.current_mode && (
-              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700">
-                {deviceStatus.current_mode}
+        {showStatusBox && (
+          <div className="rounded-2xl border-2 border-indigo-50 bg-gray-50 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">
+                Device Status
               </span>
-            )}
+              <span
+                className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${
+                  deviceStatus?.sensor_found
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-red-100 text-red-700'
+                }`}
+              >
+                {deviceStatus?.sensor_found ? 'Sensor Found' : 'Sensor Not Ready'}
+              </span>
+            </div>
+
+            <div className="mt-2 text-xs font-semibold text-gray-600">
+              {deviceStatus?.status_message || 'Waiting for device status...'}
+            </div>
+
+            <div className="mt-2 flex flex-wrap gap-2">
+              <span
+                className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${
+                  deviceStatus?.wifi_connected
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'bg-gray-200 text-gray-600'
+                }`}
+              >
+                {deviceStatus?.wifi_connected ? 'WiFi Connected' : 'WiFi Disconnected'}
+              </span>
+
+              {deviceStatus?.current_mode && (
+                <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700">
+                  {deviceStatus.current_mode}
+                </span>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
         {showScanUI && (
           <div className="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-8 animate-in fade-in duration-300">
