@@ -10,6 +10,16 @@ interface KeylockerSectionProps {
   onReturn: (logId: string) => void;
 }
 
+interface DeviceStatus {
+  device_id: string;
+  sensor_found: boolean;
+  wifi_connected: boolean;
+  current_mode: string;
+  status_message: string;
+  fingerprint_step: string;
+  updated_at?: string;
+}
+
 const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   users,
   history,
@@ -32,6 +42,8 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   const [enteredPin, setEnteredPin] = useState('');
   const [isVerifyingPin, setIsVerifyingPin] = useState(false);
 
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
+
   const keys = Array.from({ length: 20 }, (_, i) => `${101 + i}`);
 
   const activeBorrows = useMemo(() => {
@@ -46,6 +58,90 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setSelectedUser(null);
     }
   }, [selectedUserId, users]);
+
+  useEffect(() => {
+    if (!SUPABASE_CONFIGURED) return;
+
+    const loadDeviceStatus = async () => {
+      const { data, error } = await supabase
+        .from('device_status')
+        .select('*')
+        .eq('device_id', 'locker_1')
+        .maybeSingle();
+
+      if (!error && data) {
+        setDeviceStatus(data as DeviceStatus);
+      }
+    };
+
+    loadDeviceStatus();
+
+    const channel = supabase
+      .channel('keylocker-device-status')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'device_status',
+          filter: 'device_id=eq.locker_1'
+        },
+        (payload) => {
+          if (payload.new) {
+            setDeviceStatus(payload.new as DeviceStatus);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!showScanUI || !deviceStatus) return;
+
+    if (
+      deviceStatus.status_message === 'Fingerprint sensor NOT found' ||
+      deviceStatus.status_message === 'Sensor not ready'
+    ) {
+      setScanError('Fingerprint sensor is not ready.');
+      setScanMessage('Fingerprint sensor is not ready.');
+      setIsWaitingForDevice(false);
+      setIsUnlocking(false);
+      return;
+    }
+
+    if (
+      deviceStatus.current_mode === 'verify' ||
+      deviceStatus.current_mode === 'fingerprint' ||
+      deviceStatus.current_mode === 'unlock'
+    ) {
+      if (deviceStatus.status_message) {
+        setScanMessage(deviceStatus.status_message);
+      }
+
+      if (deviceStatus.fingerprint_step === 'matched') {
+        setScanError('');
+        setIsWaitingForDevice(false);
+        setIsUnlocking(true);
+      } else if (
+        deviceStatus.fingerprint_step === 'mismatch' ||
+        deviceStatus.fingerprint_step === 'capture_failed' ||
+        deviceStatus.fingerprint_step === 'remove_timeout'
+      ) {
+        setIsUnlocking(false);
+      } else if (
+        deviceStatus.fingerprint_step === 'place_finger_verify' ||
+        deviceStatus.fingerprint_step === 'remove_finger' ||
+        deviceStatus.fingerprint_step === 'finger_removed' ||
+        deviceStatus.fingerprint_step === 'unlocking'
+      ) {
+        setScanError('');
+      }
+    }
+  }, [deviceStatus, showScanUI]);
 
   const currentUserBorrow = useMemo(() => {
     if (!selectedUser) return null;
@@ -179,6 +275,10 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       throw new Error(error.message);
     }
 
+    if (!data?.id) {
+      throw new Error('Backup PIN unlock command was not created.');
+    }
+
     return await waitForCommandResult(data.id, 60000, 300);
   };
 
@@ -307,25 +407,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       actionName = 'verify_return';
     }
 
-    console.log('ACTION:', actionName);
-    console.log('CURRENT USER BORROW:', currentUserBorrow);
-    console.log('SELECTED USER:', selectedUser);
-    console.log('SELECTED KEY:', selectedKey);
-    console.log('SELECTED YEAR SECTION:', selectedYearSection);
-
-    setFailedAttempts(0);
-    setShowPinInput(false);
-    setEnteredPin('');
-    setScanError('');
-    setScanMessage(
-      isReturning
-        ? 'Waiting for ESP32 return verification...'
-        : 'Waiting for ESP32 verification...'
-    );
-    setIsUnlocking(false);
-    setIsWaitingForDevice(true);
-    setShowScanUI(true);
-
     try {
       await clearPendingDeviceCommands();
 
@@ -345,6 +426,25 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       if (error) {
         throw new Error(error.message);
       }
+
+      if (!data?.id) {
+        throw new Error('Borrow/return command was not created.');
+      }
+
+      setFailedAttempts(0);
+      setShowPinInput(false);
+      setEnteredPin('');
+      setScanError('');
+      setScanMessage(
+        deviceStatus?.sensor_found === false
+          ? 'Fingerprint sensor is not ready.'
+          : isReturning
+          ? 'Waiting for ESP32 return verification...'
+          : 'Waiting for ESP32 verification...'
+      );
+      setIsUnlocking(false);
+      setIsWaitingForDevice(true);
+      setShowScanUI(true);
 
       const result = await waitForCommandResult(data.id, 60000, 300);
 
@@ -435,27 +535,10 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     } catch (err: any) {
       setIsWaitingForDevice(false);
       setIsUnlocking(false);
+      setShowScanUI(false);
 
       const message = err.message || 'Failed to communicate with device.';
-
-      if (message.startsWith('Command timeout.')) {
-        setFailedAttempts((prev) => {
-          const next = prev + 1;
-          setScanError('No response from device in time.');
-          setScanMessage(`Verification timeout. Attempt ${next} of 3.`);
-
-          if (next >= 3) {
-            setShowScanUI(false);
-            setShowPinInput(true);
-          }
-
-          return next;
-        });
-        return;
-      }
-
-      setScanError(message);
-      setScanMessage(message);
+      alert(message);
     }
   };
 
@@ -466,6 +549,45 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   return (
     <div className="space-y-6 max-w-lg mx-auto">
       <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 space-y-8 relative overflow-hidden border border-gray-100">
+        <div className="rounded-2xl border-2 border-indigo-50 bg-gray-50 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">
+              Device Status
+            </span>
+            <span
+              className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${
+                deviceStatus?.sensor_found
+                  ? 'bg-green-100 text-green-700'
+                  : 'bg-red-100 text-red-700'
+              }`}
+            >
+              {deviceStatus?.sensor_found ? 'Sensor Found' : 'Sensor Not Ready'}
+            </span>
+          </div>
+
+          <div className="mt-2 text-xs font-semibold text-gray-600">
+            {deviceStatus?.status_message || 'Waiting for device status...'}
+          </div>
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            <span
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${
+                deviceStatus?.wifi_connected
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'bg-gray-200 text-gray-600'
+              }`}
+            >
+              {deviceStatus?.wifi_connected ? 'WiFi Connected' : 'WiFi Disconnected'}
+            </span>
+
+            {deviceStatus?.current_mode && (
+              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700">
+                {deviceStatus.current_mode}
+              </span>
+            )}
+          </div>
+        </div>
+
         {showScanUI && (
           <div className="absolute inset-0 z-50 bg-white flex flex-col items-center justify-center p-8 animate-in fade-in duration-300">
             <div className="text-center mb-8">
@@ -517,7 +639,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                 </div>
               ) : (
                 <div className="text-center text-[10px] font-black uppercase tracking-widest text-gray-400">
-                  Waiting for ESP32 fingerprint verification…
+                  {deviceStatus?.status_message || 'Waiting for ESP32 fingerprint verification…'}
                   <div className="mt-2 text-[11px] font-black text-gray-700 normal-case">
                     Expected fingerprint ID:{' '}
                     <span className="font-black">

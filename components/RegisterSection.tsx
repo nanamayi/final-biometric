@@ -8,6 +8,16 @@ interface RegisterSectionProps {
   users: User[];
 }
 
+interface DeviceStatus {
+  device_id: string;
+  sensor_found: boolean;
+  wifi_connected: boolean;
+  current_mode: string;
+  status_message: string;
+  fingerprint_step: string;
+  updated_at?: string;
+}
+
 const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) => {
   const [fullName, setFullName] = useState('');
   const [program, setProgram] = useState<Program | ''>('');
@@ -24,6 +34,8 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
   const [backupPin, setBackupPin] = useState('');
   const [confirmBackupPin, setConfirmBackupPin] = useState('');
+
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -57,6 +69,66 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       stopCamera();
     };
   }, []);
+
+  const loadDeviceStatus = async () => {
+    if (!SUPABASE_CONFIGURED) return;
+
+    const { data, error } = await supabase
+      .from('device_status')
+      .select('*')
+      .eq('device_id', 'locker_1')
+      .maybeSingle();
+
+    if (!error && data) {
+      setDeviceStatus(data as DeviceStatus);
+    }
+  };
+
+  useEffect(() => {
+    if (!SUPABASE_CONFIGURED) return;
+
+    loadDeviceStatus();
+
+    const channel = supabase
+      .channel('register-device-status')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'device_status',
+          filter: 'device_id=eq.locker_1'
+        },
+        (payload) => {
+          if (payload.new) {
+            setDeviceStatus(payload.new as DeviceStatus);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isWaitingForFingerprint || !deviceStatus) return;
+
+    if (deviceStatus.current_mode === 'enroll') {
+      setScanError('');
+      setScanMessage(deviceStatus.status_message || 'Waiting for fingerprint enrollment...');
+      return;
+    }
+
+    if (
+      deviceStatus.status_message === 'Fingerprint sensor NOT found' ||
+      deviceStatus.status_message === 'Sensor not ready'
+    ) {
+      setScanError('Fingerprint sensor is not ready.');
+      setScanMessage('Fingerprint sensor is not ready.');
+    }
+  }, [deviceStatus, isWaitingForFingerprint]);
 
   const resetFingerprintState = () => {
     setFingerprintReady(false);
@@ -92,7 +164,6 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         stopCamera();
         setIsCapturing(false);
 
-        // new photo = require fresh enroll
         resetFingerprintState();
       }
     }
@@ -181,9 +252,15 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     setAssignedFingerprintId('');
     setScanError('');
     setIsWaitingForFingerprint(true);
-    setScanMessage(
-      `Waiting for ESP32 to enroll fingerprint ID ${nextFingerprintId}. Place your finger on the sensor, remove it when asked, then place the same finger again.`
-    );
+
+    if (deviceStatus?.sensor_found === false) {
+      setScanError('Fingerprint sensor is not ready.');
+      setScanMessage('Fingerprint sensor is not ready.');
+    } else {
+      setScanMessage(
+        `Waiting for ESP32 to enroll fingerprint ID ${nextFingerprintId}. Place your finger on the sensor, remove it when asked, then place the same finger again.`
+      );
+    }
 
     try {
       await clearPendingDeviceCommands();
@@ -260,6 +337,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       setScanMessage(err.message || 'Failed to enroll fingerprint.');
     } finally {
       setIsWaitingForFingerprint(false);
+      loadDeviceStatus();
     }
   };
 
@@ -346,6 +424,45 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       </div>
 
       <div className="space-y-4">
+        <div className="rounded-2xl border-2 border-indigo-50 bg-gray-50 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs font-black uppercase tracking-widest text-gray-500">
+              Device Status
+            </span>
+            <span
+              className={`text-xs font-black uppercase tracking-widest px-3 py-1 rounded-full ${
+                deviceStatus?.sensor_found
+                  ? 'bg-green-100 text-green-700'
+                  : 'bg-red-100 text-red-700'
+              }`}
+            >
+              {deviceStatus?.sensor_found ? 'Sensor Found' : 'Sensor Not Ready'}
+            </span>
+          </div>
+
+          <div className="mt-2 text-xs font-semibold text-gray-600">
+            {deviceStatus?.status_message || 'Waiting for device status...'}
+          </div>
+
+          <div className="mt-2 flex flex-wrap gap-2">
+            <span
+              className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${
+                deviceStatus?.wifi_connected
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'bg-gray-200 text-gray-600'
+              }`}
+            >
+              {deviceStatus?.wifi_connected ? 'WiFi Connected' : 'WiFi Disconnected'}
+            </span>
+
+            {deviceStatus?.current_mode && (
+              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700">
+                {deviceStatus.current_mode}
+              </span>
+            )}
+          </div>
+        </div>
+
         <div className="relative group">
           <div className="w-32 h-32 mx-auto bg-gray-100 rounded-full border-4 border-indigo-50 shadow-md overflow-hidden flex items-center justify-center">
             {photo ? (
@@ -450,7 +567,8 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
             >
               <option value="" className="text-gray-400">Select position</option>
               <option value="Instructor" className="text-gray-900">Instructor</option>
-              <option value="Class Mayor" className="text-gray-900">Class Mayor</option>
+              <option value="Class President" className="text-gray-900">Class President</option>
+              <option value="Class V-Pres" className="text-gray-900">Class V-Pres</option>
             </select>
           </div>
 

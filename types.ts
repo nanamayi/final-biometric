@@ -1,6 +1,9 @@
-export type Program = 'BSCE' | 'BSEE' | 'BSME' | 'BSCPE' | 'BSIE'| 'CME';
+export type Program = 'BSCE' | 'BSEE' | 'BSME' | 'BSCPE' | 'BSIE' | 'CME';
 
-export type Position = 'Instructor' | 'Class Mayor';
+export type Position = 
+  | 'Instructor' 
+  | 'Class President' 
+  | 'Class V-Pres';
 
 export type YearSection = 
   | '1st Year - Day' | '1st Year - Night' 
