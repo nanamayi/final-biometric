@@ -37,10 +37,14 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
 
+  const [toastQueue, setToastQueue] = useState<string[]>([]);
   const [toastMessage, setToastMessage] = useState('');
   const [showToast, setShowToast] = useState(false);
   const toastTimeoutRef = useRef<number | null>(null);
   const lastToastMessageRef = useRef('');
+
+  const [showStatusBox, setShowStatusBox] = useState(false);
+  const statusBoxTimeoutRef = useRef<number | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -59,23 +63,26 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     return nextId;
   }, [users]);
 
-  const showDeviceToast = (message: string) => {
+  const enqueueToast = (message: string) => {
     const cleanMessage = message.trim();
     if (!cleanMessage) return;
 
-    if (lastToastMessageRef.current === cleanMessage && showToast) return;
+    setToastQueue((prev) => {
+      if (prev[prev.length - 1] === cleanMessage) return prev;
+      return [...prev, cleanMessage];
+    });
+  };
 
-    lastToastMessageRef.current = cleanMessage;
-    setToastMessage(cleanMessage);
-    setShowToast(true);
+  const flashStatusBox = () => {
+    setShowStatusBox(true);
 
-    if (toastTimeoutRef.current) {
-      window.clearTimeout(toastTimeoutRef.current);
+    if (statusBoxTimeoutRef.current) {
+      window.clearTimeout(statusBoxTimeoutRef.current);
     }
 
-    toastTimeoutRef.current = window.setTimeout(() => {
-      setShowToast(false);
-    }, 2200);
+    statusBoxTimeoutRef.current = window.setTimeout(() => {
+      setShowStatusBox(false);
+    }, 5000);
   };
 
   const stopCamera = () => {
@@ -89,10 +96,41 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
   };
 
   useEffect(() => {
+    if (showToast) return;
+    if (toastQueue.length === 0) return;
+
+    const nextMessage = toastQueue[0];
+    if (!nextMessage) return;
+
+    if (lastToastMessageRef.current === nextMessage) {
+      setToastQueue((prev) => prev.slice(1));
+      return;
+    }
+
+    lastToastMessageRef.current = nextMessage;
+    setToastMessage(nextMessage);
+    setShowToast(true);
+    setToastQueue((prev) => prev.slice(1));
+
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current);
+    }
+
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setShowToast(false);
+    }, 2200);
+  }, [toastQueue, showToast]);
+
+  useEffect(() => {
     return () => {
       stopCamera();
+
       if (toastTimeoutRef.current) {
         window.clearTimeout(toastTimeoutRef.current);
+      }
+
+      if (statusBoxTimeoutRef.current) {
+        window.clearTimeout(statusBoxTimeoutRef.current);
       }
     };
   }, []);
@@ -146,17 +184,41 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       deviceStatus.sensor_found ? 'sensor is ready' : 'sensor not ready'
     }`;
 
-    showDeviceToast(connectionMessage);
+    enqueueToast(connectionMessage);
   }, [deviceStatus?.wifi_connected, deviceStatus?.sensor_found]);
 
   useEffect(() => {
     if (!deviceStatus?.status_message) return;
 
+    const allowedModes = ['startup', 'enroll', 'recovery', 'test'];
+    if (!allowedModes.includes(deviceStatus.current_mode)) return;
+
     const message = deviceStatus.status_message.trim();
     if (!message) return;
 
-    showDeviceToast(message);
-  }, [deviceStatus?.status_message]);
+    enqueueToast(message);
+  }, [deviceStatus?.status_message, deviceStatus?.current_mode]);
+
+  useEffect(() => {
+    if (!deviceStatus) return;
+
+    const importantModes = ['startup', 'enroll', 'recovery', 'test'];
+    const shouldShow =
+      importantModes.includes(deviceStatus.current_mode) ||
+      !deviceStatus.wifi_connected ||
+      !deviceStatus.sensor_found;
+
+    if (!shouldShow) {
+      setShowStatusBox(false);
+      return;
+    }
+
+    flashStatusBox();
+  }, [
+    deviceStatus?.wifi_connected,
+    deviceStatus?.sensor_found,
+    deviceStatus?.current_mode
+  ]);
 
   useEffect(() => {
     if (!isWaitingForFingerprint || !deviceStatus) return;
@@ -302,11 +364,9 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     if (deviceStatus?.sensor_found === false) {
       setScanError('Fingerprint sensor is not ready.');
       setScanMessage('Fingerprint sensor is not ready.');
-      showDeviceToast('Fingerprint sensor is not ready.');
+      enqueueToast('Fingerprint sensor is not ready.');
     } else {
-      const enrollGuide = `Waiting for ESP32 to enroll fingerprint ID ${nextFingerprintId}. Place your finger on the sensor, remove it when asked, then place the same finger again.`;
-      setScanMessage(enrollGuide);
-      showDeviceToast('Place your fingerprint, remove, place again, remove');
+      setScanMessage(`Waiting for ESP32 to enroll fingerprint ID ${nextFingerprintId}...`);
     }
 
     try {
@@ -338,7 +398,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setFingerprintReady(true);
         setScanError('');
         setScanMessage(`Fingerprint enrolled successfully. ID ${enrolledId}`);
-        showDeviceToast(`Fingerprint enrolled successfully. ID ${enrolledId}`);
+        enqueueToast(`Fingerprint enrolled successfully. ID ${enrolledId}`);
         return;
       }
 
@@ -347,7 +407,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setAssignedFingerprintId('');
         setScanError('ESP32 failed to enroll fingerprint.');
         setScanMessage('Fingerprint enrollment failed. Please try again.');
-        showDeviceToast('Fingerprint enrollment failed. Please try again.');
+        enqueueToast('Fingerprint enrollment failed. Please try again.');
         return;
       }
 
@@ -356,7 +416,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setAssignedFingerprintId('');
         setScanError('ESP32 enrollment timed out.');
         setScanMessage('Enrollment timed out on the ESP32. Please try again.');
-        showDeviceToast('Enrollment timed out on the ESP32.');
+        enqueueToast('Enrollment timed out on the ESP32.');
         return;
       }
 
@@ -365,7 +425,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setAssignedFingerprintId('');
         setScanError('Fingerprint sensor is not ready.');
         setScanMessage('Fingerprint sensor is not ready.');
-        showDeviceToast('Fingerprint sensor is not ready.');
+        enqueueToast('Fingerprint sensor is not ready.');
         return;
       }
 
@@ -374,7 +434,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setAssignedFingerprintId('');
         setScanError('Invalid fingerprint ID sent to ESP32.');
         setScanMessage('Invalid fingerprint ID sent to ESP32.');
-        showDeviceToast('Invalid fingerprint ID sent to ESP32.');
+        enqueueToast('Invalid fingerprint ID sent to ESP32.');
         return;
       }
 
@@ -382,13 +442,13 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       setAssignedFingerprintId('');
       setScanError(`Unexpected result: ${result.result}`);
       setScanMessage(`Unexpected result: ${result.result}`);
-      showDeviceToast(`Unexpected result: ${result.result}`);
+      enqueueToast(`Unexpected result: ${result.result}`);
     } catch (err: any) {
       setFingerprintReady(false);
       setAssignedFingerprintId('');
       setScanError(err.message || 'Failed to enroll fingerprint.');
       setScanMessage(err.message || 'Failed to enroll fingerprint.');
-      showDeviceToast(err.message || 'Failed to enroll fingerprint.');
+      enqueueToast(err.message || 'Failed to enroll fingerprint.');
     } finally {
       setIsWaitingForFingerprint(false);
       loadDeviceStatus();
@@ -456,7 +516,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       backupPin
     });
 
-    showDeviceToast('User registered successfully.');
+    enqueueToast('User registered successfully.');
 
     setFullName('');
     setProgram('');
@@ -486,44 +546,46 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       </div>
 
       <div className="space-y-4">
-        <div className="rounded-2xl border-2 border-indigo-50 bg-gray-50 px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-xs font-black uppercase tracking-widest text-gray-500">
-              Device Status
-            </span>
-            <span
-              className={`text-xs font-black uppercase tracking-widest px-3 py-1 rounded-full ${
-                deviceStatus?.sensor_found
-                  ? 'bg-green-100 text-green-700'
-                  : 'bg-red-100 text-red-700'
-              }`}
-            >
-              {deviceStatus?.sensor_found ? 'Sensor Found' : 'Sensor Not Ready'}
-            </span>
-          </div>
-
-          <div className="mt-2 text-xs font-semibold text-gray-600">
-            {deviceStatus?.status_message || 'Waiting for device status...'}
-          </div>
-
-          <div className="mt-2 flex flex-wrap gap-2">
-            <span
-              className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${
-                deviceStatus?.wifi_connected
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'bg-gray-200 text-gray-600'
-              }`}
-            >
-              {deviceStatus?.wifi_connected ? 'WiFi Connected' : 'WiFi Disconnected'}
-            </span>
-
-            {deviceStatus?.current_mode && (
-              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700">
-                {deviceStatus.current_mode}
+        {showStatusBox && (
+          <div className="rounded-2xl border-2 border-indigo-50 bg-gray-50 px-4 py-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs font-black uppercase tracking-widest text-gray-500">
+                Device Status
               </span>
-            )}
+              <span
+                className={`text-xs font-black uppercase tracking-widest px-3 py-1 rounded-full ${
+                  deviceStatus?.sensor_found
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-red-100 text-red-700'
+                }`}
+              >
+                {deviceStatus?.sensor_found ? 'Sensor Found' : 'Sensor Not Ready'}
+              </span>
+            </div>
+
+            <div className="mt-2 text-xs font-semibold text-gray-600">
+              {deviceStatus?.status_message || 'Waiting for device status...'}
+            </div>
+
+            <div className="mt-2 flex flex-wrap gap-2">
+              <span
+                className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${
+                  deviceStatus?.wifi_connected
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'bg-gray-200 text-gray-600'
+                }`}
+              >
+                {deviceStatus?.wifi_connected ? 'WiFi Connected' : 'WiFi Disconnected'}
+              </span>
+
+              {deviceStatus?.current_mode && (
+                <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700">
+                  {deviceStatus.current_mode}
+                </span>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="relative group">
           <div className="w-32 h-32 mx-auto bg-gray-100 rounded-full border-4 border-indigo-50 shadow-md overflow-hidden flex items-center justify-center">

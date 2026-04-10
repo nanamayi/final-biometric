@@ -208,9 +208,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
   }, [
     deviceStatus?.wifi_connected,
     deviceStatus?.sensor_found,
-    deviceStatus?.current_mode,
-    deviceStatus?.status_message,
-    deviceStatus?.fingerprint_step
+    deviceStatus?.current_mode
   ]);
 
   useEffect(() => {
@@ -552,12 +550,11 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setScanMessage(
         deviceStatus?.sensor_found === false
           ? 'Fingerprint sensor is not ready.'
-          : 'Place your finger and remove.'
+          : 'Waiting for fingerprint...'
       );
       setIsUnlocking(false);
       setIsWaitingForDevice(true);
       setShowScanUI(true);
-      enqueueToast('Place your finger and remove.');
 
       const result = await waitForCommandResult(data.id, 60000, 300);
 
