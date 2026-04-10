@@ -44,6 +44,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
 
+  const [toastQueue, setToastQueue] = useState<string[]>([]);
   const [toastMessage, setToastMessage] = useState('');
   const [showToast, setShowToast] = useState(false);
   const toastTimeoutRef = useRef<number | null>(null);
@@ -58,23 +59,14 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     return history.filter((h) => h.status === 'Borrowed' && !h.timeOut);
   }, [history]);
 
-  const showDeviceToast = (message: string) => {
+  const enqueueToast = (message: string) => {
     const cleanMessage = message.trim();
     if (!cleanMessage) return;
 
-    if (lastToastMessageRef.current === cleanMessage && showToast) return;
-
-    lastToastMessageRef.current = cleanMessage;
-    setToastMessage(cleanMessage);
-    setShowToast(true);
-
-    if (toastTimeoutRef.current) {
-      window.clearTimeout(toastTimeoutRef.current);
-    }
-
-    toastTimeoutRef.current = window.setTimeout(() => {
-      setShowToast(false);
-    }, 2200);
+    setToastQueue((prev) => {
+      if (prev[prev.length - 1] === cleanMessage) return prev;
+      return [...prev, cleanMessage];
+    });
   };
 
   const flashStatusBox = () => {
@@ -88,6 +80,32 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setShowStatusBox(false);
     }, 5000);
   };
+
+  useEffect(() => {
+    if (showToast) return;
+    if (toastQueue.length === 0) return;
+
+    const nextMessage = toastQueue[0];
+    if (!nextMessage) return;
+
+    if (lastToastMessageRef.current === nextMessage) {
+      setToastQueue((prev) => prev.slice(1));
+      return;
+    }
+
+    lastToastMessageRef.current = nextMessage;
+    setToastMessage(nextMessage);
+    setShowToast(true);
+    setToastQueue((prev) => prev.slice(1));
+
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current);
+    }
+
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setShowToast(false);
+    }, 2200);
+  }, [toastQueue, showToast]);
 
   useEffect(() => {
     return () => {
@@ -157,11 +175,34 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       deviceStatus.sensor_found ? 'sensor is ready' : 'sensor not ready'
     }`;
 
-    showDeviceToast(connectionMessage);
+    enqueueToast(connectionMessage);
   }, [deviceStatus?.wifi_connected, deviceStatus?.sensor_found]);
 
   useEffect(() => {
+    if (!deviceStatus?.status_message) return;
+
+    const allowedModes = ['verify', 'unlock', 'recovery', 'test'];
+    if (!allowedModes.includes(deviceStatus.current_mode)) return;
+
+    const message = deviceStatus.status_message.trim();
+    if (!message) return;
+
+    enqueueToast(message);
+  }, [deviceStatus?.status_message, deviceStatus?.current_mode]);
+
+  useEffect(() => {
     if (!deviceStatus) return;
+
+    const importantModes = ['verify', 'unlock', 'recovery', 'test'];
+    const shouldShow =
+      importantModes.includes(deviceStatus.current_mode) ||
+      !deviceStatus.wifi_connected ||
+      !deviceStatus.sensor_found;
+
+    if (!shouldShow) {
+      setShowStatusBox(false);
+      return;
+    }
 
     flashStatusBox();
   }, [
@@ -171,18 +212,6 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
     deviceStatus?.status_message,
     deviceStatus?.fingerprint_step
   ]);
-
-  useEffect(() => {
-    if (!deviceStatus?.status_message) return;
-
-    const allowedModes = ['idle', 'verify', 'unlock', 'recovery', 'test'];
-    if (!allowedModes.includes(deviceStatus.current_mode)) return;
-
-    const message = deviceStatus.status_message.trim();
-    if (!message) return;
-
-    showDeviceToast(message);
-  }, [deviceStatus?.status_message, deviceStatus?.current_mode]);
 
   useEffect(() => {
     if (!showScanUI || !deviceStatus) return;
@@ -317,7 +346,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
     if (currentUserBorrow) {
       onReturn(currentUserBorrow.id);
-      showDeviceToast(`Key #${currentUserBorrow.keyNumber} returned successfully.`);
+      enqueueToast(`Key #${currentUserBorrow.keyNumber} returned successfully.`);
     } else {
       const now = new Date();
 
@@ -337,7 +366,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       };
 
       onBorrow(newHistoryItem);
-      showDeviceToast(`Key #${selectedKey} borrowed successfully.`);
+      enqueueToast(`Key #${selectedKey} borrowed successfully.`);
     }
 
     resetAllState();
@@ -410,7 +439,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setShowScanUI(true);
       setIsWaitingForDevice(true);
       setIsUnlocking(false);
-      showDeviceToast('Backup PIN verified. Unlocking cabinet...');
+      enqueueToast('Backup PIN verified. Unlocking cabinet...');
 
       const result = await sendBackupPinUnlockCommand(keyForCommand);
 
@@ -424,7 +453,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setIsUnlocking(true);
       setScanMessage('Backup PIN verified');
       setScanError('');
-      showDeviceToast('Backup PIN verified.');
+      enqueueToast('Backup PIN verified.');
 
       setTimeout(() => {
         executeFinalAction();
@@ -528,7 +557,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setIsUnlocking(false);
       setIsWaitingForDevice(true);
       setShowScanUI(true);
-      showDeviceToast('Place your finger and remove.');
+      enqueueToast('Place your finger and remove.');
 
       const result = await waitForCommandResult(data.id, 60000, 300);
 
@@ -542,7 +571,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setIsWaitingForDevice(false);
         setIsUnlocking(true);
         setFailedAttempts(0);
-        showDeviceToast('Fingerprint matched.');
+        enqueueToast('Fingerprint matched.');
 
         setTimeout(() => {
           executeFinalAction();
@@ -558,7 +587,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setShowScanUI(false);
         setShowPinInput(true);
         setFailedAttempts(1);
-        showDeviceToast('Fingerprint did not match. Please enter your backup PIN.');
+        enqueueToast('Fingerprint did not match. Please enter your backup PIN.');
         return;
       }
 
@@ -570,7 +599,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setScanMessage('Verification failed. Please enter your backup PIN.');
         setShowScanUI(false);
         setShowPinInput(true);
-        showDeviceToast('No fingerprint detected. Please enter your backup PIN.');
+        enqueueToast('No fingerprint detected. Please enter your backup PIN.');
         return;
       }
 
@@ -582,7 +611,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setScanMessage('Fingerprint did not match. Please enter your backup PIN.');
         setShowScanUI(false);
         setShowPinInput(true);
-        showDeviceToast('Fingerprint did not match. Please enter your backup PIN.');
+        enqueueToast('Fingerprint did not match. Please enter your backup PIN.');
         return;
       }
 
@@ -591,7 +620,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setIsUnlocking(false);
         setScanError('Fingerprint sensor is not ready.');
         setScanMessage('Device sensor is not ready.');
-        showDeviceToast('Fingerprint sensor is not ready.');
+        enqueueToast('Fingerprint sensor is not ready.');
         return;
       }
 
@@ -600,7 +629,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setIsUnlocking(false);
         setScanError('Locker unlock failed.');
         setScanMessage('Locker unlock failed.');
-        showDeviceToast('Locker unlock failed.');
+        enqueueToast('Locker unlock failed.');
         return;
       }
 
@@ -608,7 +637,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setIsUnlocking(false);
       setScanError(`Unexpected result: ${result.result}`);
       setScanMessage(`Unexpected result: ${result.result}`);
-      showDeviceToast(`Unexpected result: ${result.result}`);
+      enqueueToast(`Unexpected result: ${result.result}`);
     } catch (err: any) {
       setIsWaitingForDevice(false);
       setIsUnlocking(false);
