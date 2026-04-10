@@ -401,11 +401,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       return;
     }
 
-    let actionName = 'verify_and_unlock';
-
-    if (currentUserBorrow && currentUserBorrow.id) {
-      actionName = 'verify_return';
-    }
+    const actionName = 'verify_and_unlock';
 
     try {
       await clearPendingDeviceCommands();
@@ -468,47 +464,33 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       if (result.result === 'show_backup_pin') {
         setIsWaitingForDevice(false);
         setIsUnlocking(false);
-        setScanError('Fingerprint failed 3 times.');
+        setScanError('Fingerprint mismatch.');
         setScanMessage('Please enter your backup PIN.');
         setShowScanUI(false);
         setShowPinInput(true);
-        setFailedAttempts(3);
+        setFailedAttempts(1);
         return;
       }
 
       if (result.result === 'timeout') {
         setIsWaitingForDevice(false);
         setIsUnlocking(false);
-        setFailedAttempts((prev) => {
-          const next = prev + 1;
-          setScanError('No fingerprint detected in time.');
-          setScanMessage(`Verification timeout. Attempt ${next} of 3.`);
-
-          if (next >= 3) {
-            setShowScanUI(false);
-            setShowPinInput(true);
-          }
-
-          return next;
-        });
+        setFailedAttempts(1);
+        setScanError('No fingerprint detected in time.');
+        setScanMessage('Verification failed. Please enter your backup PIN.');
+        setShowScanUI(false);
+        setShowPinInput(true);
         return;
       }
 
       if (result.result === 'mismatch') {
         setIsWaitingForDevice(false);
         setIsUnlocking(false);
-        setFailedAttempts((prev) => {
-          const next = prev + 1;
-          setScanError(`Fingerprint mismatch. Scanned ID ${result.scanned_fingerprint_id ?? 'unknown'}.`);
-          setScanMessage(`No match. Attempt ${next} of 3.`);
-
-          if (next >= 3) {
-            setShowScanUI(false);
-            setShowPinInput(true);
-          }
-
-          return next;
-        });
+        setFailedAttempts(1);
+        setScanError(`Fingerprint mismatch. Scanned ID ${result.scanned_fingerprint_id ?? 'unknown'}.`);
+        setScanMessage('Fingerprint did not match. Please enter your backup PIN.');
+        setShowScanUI(false);
+        setShowPinInput(true);
         return;
       }
 
@@ -649,7 +631,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                     </span>
                   </div>
                   <div className="mt-2 text-[11px] font-black text-amber-600 normal-case">
-                    Failed attempts: {failedAttempts}/3
+                    Failed attempts: {failedAttempts}/1
                   </div>
                 </div>
               )}
@@ -675,7 +657,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
                 Enter Backup PIN
               </h3>
               <p className="text-gray-500 text-sm font-medium">
-                Fingerprint failed 3 times. Enter your backup PIN to continue.
+                Fingerprint failed once. Enter your backup PIN to continue.
               </p>
             </div>
 
