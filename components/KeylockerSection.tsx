@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { User, HistoryItem, YearSection } from '../types';
 import { Fingerprint, Lock, Unlock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import { supabase, SUPABASE_CONFIGURED } from '../supabase';
@@ -44,11 +44,43 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
 
+  const [toastMessage, setToastMessage] = useState('');
+  const [showToast, setShowToast] = useState(false);
+  const toastTimeoutRef = useRef<number | null>(null);
+  const lastToastMessageRef = useRef('');
+
   const keys = Array.from({ length: 20 }, (_, i) => `${101 + i}`);
 
   const activeBorrows = useMemo(() => {
     return history.filter((h) => h.status === 'Borrowed' && !h.timeOut);
   }, [history]);
+
+  const showDeviceToast = (message: string) => {
+    const cleanMessage = message.trim();
+    if (!cleanMessage) return;
+
+    if (lastToastMessageRef.current === cleanMessage && showToast) return;
+
+    lastToastMessageRef.current = cleanMessage;
+    setToastMessage(cleanMessage);
+    setShowToast(true);
+
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current);
+    }
+
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setShowToast(false);
+    }, 2200);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        window.clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (selectedUserId) {
@@ -98,6 +130,25 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       supabase.removeChannel(channel);
     };
   }, []);
+
+  useEffect(() => {
+    if (!deviceStatus) return;
+
+    const connectionMessage = `${deviceStatus.wifi_connected ? 'WiFi connected' : 'WiFi disconnected'}, ${
+      deviceStatus.sensor_found ? 'sensor is ready' : 'sensor not ready'
+    }`;
+
+    showDeviceToast(connectionMessage);
+  }, [deviceStatus?.wifi_connected, deviceStatus?.sensor_found]);
+
+  useEffect(() => {
+    if (!deviceStatus?.status_message) return;
+
+    const message = deviceStatus.status_message.trim();
+    if (!message) return;
+
+    showDeviceToast(message);
+  }, [deviceStatus?.status_message]);
 
   useEffect(() => {
     if (!showScanUI || !deviceStatus) return;
@@ -232,6 +283,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
     if (currentUserBorrow) {
       onReturn(currentUserBorrow.id);
+      showDeviceToast(`Key #${currentUserBorrow.keyNumber} returned successfully.`);
     } else {
       const now = new Date();
 
@@ -251,6 +303,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       };
 
       onBorrow(newHistoryItem);
+      showDeviceToast(`Key #${selectedKey} borrowed successfully.`);
     }
 
     resetAllState();
@@ -323,6 +376,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setShowScanUI(true);
       setIsWaitingForDevice(true);
       setIsUnlocking(false);
+      showDeviceToast('Backup PIN verified. Unlocking cabinet...');
 
       const result = await sendBackupPinUnlockCommand(keyForCommand);
 
@@ -336,6 +390,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setIsUnlocking(true);
       setScanMessage('Backup PIN verified');
       setScanError('');
+      showDeviceToast('Backup PIN verified.');
 
       setTimeout(() => {
         executeFinalAction();
@@ -434,13 +489,12 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setScanMessage(
         deviceStatus?.sensor_found === false
           ? 'Fingerprint sensor is not ready.'
-          : isReturning
-          ? 'Waiting for ESP32 return verification...'
-          : 'Waiting for ESP32 verification...'
+          : 'Place your fingerprint and remove.'
       );
       setIsUnlocking(false);
       setIsWaitingForDevice(true);
       setShowScanUI(true);
+      showDeviceToast('Place your fingerprint and remove.');
 
       const result = await waitForCommandResult(data.id, 60000, 300);
 
@@ -454,6 +508,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setIsWaitingForDevice(false);
         setIsUnlocking(true);
         setFailedAttempts(0);
+        showDeviceToast('Fingerprint matched.');
 
         setTimeout(() => {
           executeFinalAction();
@@ -469,6 +524,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setShowScanUI(false);
         setShowPinInput(true);
         setFailedAttempts(1);
+        showDeviceToast('Fingerprint did not match. Please enter your backup PIN.');
         return;
       }
 
@@ -480,6 +536,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setScanMessage('Verification failed. Please enter your backup PIN.');
         setShowScanUI(false);
         setShowPinInput(true);
+        showDeviceToast('No fingerprint detected. Please enter your backup PIN.');
         return;
       }
 
@@ -491,6 +548,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setScanMessage('Fingerprint did not match. Please enter your backup PIN.');
         setShowScanUI(false);
         setShowPinInput(true);
+        showDeviceToast('Fingerprint did not match. Please enter your backup PIN.');
         return;
       }
 
@@ -499,6 +557,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setIsUnlocking(false);
         setScanError('Fingerprint sensor is not ready.');
         setScanMessage('Device sensor is not ready.');
+        showDeviceToast('Fingerprint sensor is not ready.');
         return;
       }
 
@@ -507,6 +566,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
         setIsUnlocking(false);
         setScanError('Locker unlock failed.');
         setScanMessage('Locker unlock failed.');
+        showDeviceToast('Locker unlock failed.');
         return;
       }
 
@@ -514,6 +574,7 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
       setIsUnlocking(false);
       setScanError(`Unexpected result: ${result.result}`);
       setScanMessage(`Unexpected result: ${result.result}`);
+      showDeviceToast(`Unexpected result: ${result.result}`);
     } catch (err: any) {
       setIsWaitingForDevice(false);
       setIsUnlocking(false);
@@ -530,6 +591,12 @@ const KeylockerSection: React.FC<KeylockerSectionProps> = ({
 
   return (
     <div className="space-y-6 max-w-lg mx-auto">
+      {showToast && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[9999] bg-indigo-600 text-white px-5 py-3 rounded-2xl shadow-2xl text-sm font-bold animate-in fade-in slide-in-from-top-2 duration-300">
+          {toastMessage}
+        </div>
+      )}
+
       <div className="bg-white rounded-[2.5rem] shadow-2xl p-8 space-y-8 relative overflow-hidden border border-gray-100">
         <div className="rounded-2xl border-2 border-indigo-50 bg-gray-50 px-4 py-3">
           <div className="flex items-center justify-between gap-3">

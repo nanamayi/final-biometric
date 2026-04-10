@@ -37,6 +37,11 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
 
+  const [toastMessage, setToastMessage] = useState('');
+  const [showToast, setShowToast] = useState(false);
+  const toastTimeoutRef = useRef<number | null>(null);
+  const lastToastMessageRef = useRef('');
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -54,6 +59,25 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     return nextId;
   }, [users]);
 
+  const showDeviceToast = (message: string) => {
+    const cleanMessage = message.trim();
+    if (!cleanMessage) return;
+
+    if (lastToastMessageRef.current === cleanMessage && showToast) return;
+
+    lastToastMessageRef.current = cleanMessage;
+    setToastMessage(cleanMessage);
+    setShowToast(true);
+
+    if (toastTimeoutRef.current) {
+      window.clearTimeout(toastTimeoutRef.current);
+    }
+
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setShowToast(false);
+    }, 2200);
+  };
+
   const stopCamera = () => {
     const stream = videoRef.current?.srcObject as MediaStream | null;
     if (stream) {
@@ -67,6 +91,9 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
   useEffect(() => {
     return () => {
       stopCamera();
+      if (toastTimeoutRef.current) {
+        window.clearTimeout(toastTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -111,6 +138,25 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       supabase.removeChannel(channel);
     };
   }, []);
+
+  useEffect(() => {
+    if (!deviceStatus) return;
+
+    const connectionMessage = `${deviceStatus.wifi_connected ? 'WiFi connected' : 'WiFi disconnected'}, ${
+      deviceStatus.sensor_found ? 'sensor is ready' : 'sensor not ready'
+    }`;
+
+    showDeviceToast(connectionMessage);
+  }, [deviceStatus?.wifi_connected, deviceStatus?.sensor_found]);
+
+  useEffect(() => {
+    if (!deviceStatus?.status_message) return;
+
+    const message = deviceStatus.status_message.trim();
+    if (!message) return;
+
+    showDeviceToast(message);
+  }, [deviceStatus?.status_message]);
 
   useEffect(() => {
     if (!isWaitingForFingerprint || !deviceStatus) return;
@@ -256,10 +302,11 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     if (deviceStatus?.sensor_found === false) {
       setScanError('Fingerprint sensor is not ready.');
       setScanMessage('Fingerprint sensor is not ready.');
+      showDeviceToast('Fingerprint sensor is not ready.');
     } else {
-      setScanMessage(
-        `Waiting for ESP32 to enroll fingerprint ID ${nextFingerprintId}. Place your finger on the sensor, remove it when asked, then place the same finger again.`
-      );
+      const enrollGuide = `Waiting for ESP32 to enroll fingerprint ID ${nextFingerprintId}. Place your finger on the sensor, remove it when asked, then place the same finger again.`;
+      setScanMessage(enrollGuide);
+      showDeviceToast('Place your fingerprint, remove, place again, remove');
     }
 
     try {
@@ -291,6 +338,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setFingerprintReady(true);
         setScanError('');
         setScanMessage(`Fingerprint enrolled successfully. ID ${enrolledId}`);
+        showDeviceToast(`Fingerprint enrolled successfully. ID ${enrolledId}`);
         return;
       }
 
@@ -299,6 +347,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setAssignedFingerprintId('');
         setScanError('ESP32 failed to enroll fingerprint.');
         setScanMessage('Fingerprint enrollment failed. Please try again.');
+        showDeviceToast('Fingerprint enrollment failed. Please try again.');
         return;
       }
 
@@ -307,6 +356,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setAssignedFingerprintId('');
         setScanError('ESP32 enrollment timed out.');
         setScanMessage('Enrollment timed out on the ESP32. Please try again.');
+        showDeviceToast('Enrollment timed out on the ESP32.');
         return;
       }
 
@@ -315,6 +365,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setAssignedFingerprintId('');
         setScanError('Fingerprint sensor is not ready.');
         setScanMessage('Fingerprint sensor is not ready.');
+        showDeviceToast('Fingerprint sensor is not ready.');
         return;
       }
 
@@ -323,6 +374,7 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
         setAssignedFingerprintId('');
         setScanError('Invalid fingerprint ID sent to ESP32.');
         setScanMessage('Invalid fingerprint ID sent to ESP32.');
+        showDeviceToast('Invalid fingerprint ID sent to ESP32.');
         return;
       }
 
@@ -330,11 +382,13 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       setAssignedFingerprintId('');
       setScanError(`Unexpected result: ${result.result}`);
       setScanMessage(`Unexpected result: ${result.result}`);
+      showDeviceToast(`Unexpected result: ${result.result}`);
     } catch (err: any) {
       setFingerprintReady(false);
       setAssignedFingerprintId('');
       setScanError(err.message || 'Failed to enroll fingerprint.');
       setScanMessage(err.message || 'Failed to enroll fingerprint.');
+      showDeviceToast(err.message || 'Failed to enroll fingerprint.');
     } finally {
       setIsWaitingForFingerprint(false);
       loadDeviceStatus();
@@ -402,6 +456,8 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
       backupPin
     });
 
+    showDeviceToast('User registered successfully.');
+
     setFullName('');
     setProgram('');
     setPosition('');
@@ -415,6 +471,12 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
   return (
     <div className="bg-white rounded-[2rem] shadow-xl p-8 max-w-md mx-auto space-y-6">
+      {showToast && (
+        <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[9999] bg-indigo-600 text-white px-5 py-3 rounded-2xl shadow-2xl text-sm font-bold animate-in fade-in slide-in-from-top-2 duration-300">
+          {toastMessage}
+        </div>
+      )}
+
       <div className="text-center space-y-2">
         <div className="mx-auto w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-700 mb-2">
           <UserPlus size={24} />
