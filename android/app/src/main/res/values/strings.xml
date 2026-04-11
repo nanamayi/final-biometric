@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Biometric Key Locker</string>
+    <string name="title_activity_main">Biometric Key Locker</string>
+    <string name="package_name">com.ctu.keylocker</string>
+    <string name="custom_url_scheme">com.ctu.keylocker</string>
+</resources>

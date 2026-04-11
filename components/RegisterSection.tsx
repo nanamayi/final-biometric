@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { Program, Position, YearSection, User } from '../types';
 import { Camera, Fingerprint, UserPlus, Trash2, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { Camera as CapCamera, CameraResultType, CameraSource } from '@capacitor/camera';
 import { supabase, SUPABASE_CONFIGURED } from '../supabase';
 
 interface RegisterSectionProps {
@@ -24,8 +25,6 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
   const [position, setPosition] = useState<Position | ''>('');
   const [photo, setPhoto] = useState<string | null>(null);
 
-  const [isCapturing, setIsCapturing] = useState(false);
-
   const [fingerprintReady, setFingerprintReady] = useState(false);
   const [assignedFingerprintId, setAssignedFingerprintId] = useState<string>('');
   const [scanMessage, setScanMessage] = useState('Click to enroll fingerprint.');
@@ -45,9 +44,6 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
   const [showStatusBox, setShowStatusBox] = useState(false);
   const statusBoxTimeoutRef = useRef<number | null>(null);
-
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const nextFingerprintId = useMemo(() => {
     const numericIds = users
@@ -85,16 +81,6 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     }, 5000);
   };
 
-  const stopCamera = () => {
-    const stream = videoRef.current?.srcObject as MediaStream | null;
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-  };
-
   useEffect(() => {
     if (showToast) return;
     if (toastQueue.length === 0) return;
@@ -123,8 +109,6 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
 
   useEffect(() => {
     return () => {
-      stopCamera();
-
       if (toastTimeoutRef.current) {
         window.clearTimeout(toastTimeoutRef.current);
       }
@@ -246,34 +230,22 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     setIsWaitingForFingerprint(false);
   };
 
-  const startCamera = async () => {
-    setIsCapturing(true);
+  const capturePhoto = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+      const image = await CapCamera.getPhoto({
+        quality: 90,
+        allowEditing: false,
+        resultType: CameraResultType.DataUrl,
+        source: CameraSource.Camera,
+      });
+
+      if (image.dataUrl) {
+        setPhoto(image.dataUrl);
+        resetFingerprintState();
       }
     } catch (err) {
       console.error('Camera error:', err);
-      alert('Could not access camera.');
-      setIsCapturing(false);
-    }
-  };
-
-  const capturePhoto = () => {
-    if (videoRef.current && canvasRef.current) {
-      const context = canvasRef.current.getContext('2d');
-      if (context) {
-        canvasRef.current.width = videoRef.current.videoWidth;
-        canvasRef.current.height = videoRef.current.videoHeight;
-        context.drawImage(videoRef.current, 0, 0);
-        const dataUrl = canvasRef.current.toDataURL('image/jpeg');
-        setPhoto(dataUrl);
-        stopCamera();
-        setIsCapturing(false);
-
-        resetFingerprintState();
-      }
+      alert('Failed to open camera.');
     }
   };
 
@@ -525,8 +497,6 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
     resetFingerprintState();
     setBackupPin('');
     setConfirmBackupPin('');
-    stopCamera();
-    setIsCapturing(false);
   };
 
   return (
@@ -591,34 +561,18 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
           <div className="w-32 h-32 mx-auto bg-gray-100 rounded-full border-4 border-indigo-50 shadow-md overflow-hidden flex items-center justify-center">
             {photo ? (
               <img src={photo} alt="User" className="w-full h-full object-cover" />
-            ) : isCapturing ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                className="w-full h-full object-cover scale-x-[-1]"
-              />
             ) : (
               <Camera size={40} className="text-gray-400" />
             )}
           </div>
 
           <div className="flex justify-center mt-3">
-            {!photo && !isCapturing && (
+            {!photo && (
               <button
-                onClick={startCamera}
+                onClick={capturePhoto}
                 className="text-sm font-bold uppercase tracking-widest text-indigo-700 bg-indigo-50 px-5 py-2.5 rounded-full hover:bg-indigo-100 transition-colors border border-indigo-100"
               >
                 Take Photo
-              </button>
-            )}
-
-            {isCapturing && (
-              <button
-                onClick={capturePhoto}
-                className="text-sm font-bold uppercase tracking-widest text-white bg-indigo-600 px-5 py-2.5 rounded-full shadow-lg hover:bg-indigo-700 transition-all"
-              >
-                Capture
               </button>
             )}
 
@@ -634,8 +588,6 @@ const RegisterSection: React.FC<RegisterSectionProps> = ({ onRegister, users }) 
               </button>
             )}
           </div>
-
-          <canvas ref={canvasRef} className="hidden" />
         </div>
 
         <div className="space-y-4">
