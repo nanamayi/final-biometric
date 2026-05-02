@@ -34,7 +34,7 @@ export interface HistoryItem {
   date: string;
   timeIn: string;
   timeOut: string | null;
-  status: 'Borrowed' | 'Returned';
+status: 'Borrowed' | 'Returned' | 'Borrowed (Pending Sync)' | 'Returned (Pending Sync)';
 }
 
 export type Tab = 'Register' | 'Keylocker' | 'Registered' | 'History';

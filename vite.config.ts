@@ -6,14 +6,14 @@ export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, process.cwd(), "");
 
     return {
-        base: "/", // IMPORTANT for Vercel deployment
+        base: "/", 
         server: {
             port: 5173,
             host: "0.0.0.0",
         },
         plugins: [react()],
         define: {
-            // Pass environment variables to the client securely
+           
             "process.env.API_KEY": JSON.stringify(env.GEMINI_API_KEY),
             "process.env.GEMINI_API_KEY": JSON.stringify(env.GEMINI_API_KEY),
         },
